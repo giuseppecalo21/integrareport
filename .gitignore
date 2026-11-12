@@ -1,0 +1,4 @@
+integra-report/vendor/
+dist/
+*.zip
+.DS_Store

@@ -1,0 +1,22 @@
+{
+  "name": "integra/integra-report",
+  "description": "Plugin WordPress per la generazione di report di consulenza per PMI siciliane con tracciabilit\u00e0 dei calcoli.",
+  "type": "wordpress-plugin",
+  "license": "proprietary",
+  "require": {
+    "php": ">=8.1",
+    "anthropic-ai/sdk": "^1.8",
+    "guzzlehttp/guzzle": "^7.9"
+  },
+  "config": {
+    "platform": {
+      "php": "8.1.0"
+    },
+    "allow-plugins": {
+      "php-http/discovery": false
+    },
+    "optimize-autoloader": true,
+    "sort-packages": true,
+    "preferred-install": "dist"
+  }
+}
