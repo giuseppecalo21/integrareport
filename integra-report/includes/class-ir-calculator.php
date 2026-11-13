@@ -387,7 +387,7 @@ final class IR_Calculator
         $this->n('ROA', $p, 'ROA — Return on assets', 'pct', 'EBIT / Attivo totale medio × 100', ['EBIT' => $k('EBIT'), 'AT medio' => $k('AT_MEDIO')], fn($v) => $v['AT medio'] > 0 ? $v['EBIT'] / $v['AT medio'] * 100 : null, ['soglia' => 'ROA']);
         $this->n('ROD', $p, 'ROD — Costo medio del debito', 'pct', 'Oneri finanziari netti / PFN media × 100', ['OF netti' => $k('OF_NETTI'), 'PFN media' => $k('PFN_MEDIA')], fn($v) => $v['PFN media'] > 0 ? $v['OF netti'] / $v['PFN media'] * 100 : ['nv' => 'PFN media non positiva (cassa netta): indicatore non significativo'],
             ['note' => 'Confronto con il ROI: se ROD > ROI la leva finanziaria è sfavorevole.']);
-        $this->n('LEVA', $p, 'Effetto leva finanziaria', 'pct', '(ROI − ROD) × PFN / PN', ['ROI' => $k('ROI'), 'ROD' => $k('ROD'), 'PFN' => $k('PFN'), 'PN' => $k('PN')], fn($v) => $v['PN'] > 0 ? ($v['ROI'] - $v['ROD']) * $v['PFN'] / $v['PN'] : ['nv' => 'patrimonio netto non positivo'],
+        $this->n('LEVA', $p, 'Effetto leva finanziaria', 'pct', '(ROI − ROD) × PFN / PN', ['ROI' => $k('ROI'), 'ROD' => $k('ROD'), 'PFN' => $k('PFN'), 'PN' => $k('PN')], fn($v) => $v['PN'] <= 0 ? ['nv' => 'patrimonio netto non positivo'] : ($v['PFN'] > 0 ? ($v['ROI'] - $v['ROD']) * $v['PFN'] / $v['PN'] : ['nv' => 'posizione finanziaria netta non positiva (cassa netta): effetto leva non applicabile']),
             ['eval' => fn($x) => ['level' => $x >= 0 ? 'good' : 'bad', 'text' => $x >= 0 ? 'Leva favorevole' : 'Leva sfavorevole', 'soglia' => 'Positivo = leva favorevole', 'fonte' => 'formule_kpi.md §5']]);
 
         $prev = $this->prev($p);

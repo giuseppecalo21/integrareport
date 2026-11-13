@@ -954,7 +954,7 @@
     if (!paper) return;
     const w = window.open('', '_blank');
     const css = [...document.querySelectorAll('link[rel="stylesheet"]')].filter((l) => l.href.includes('integra-report')).map((l) => `<link rel="stylesheet" href="${l.href}">`).join('');
-    w.document.write(`<!doctype html><html lang="it"><head><meta charset="utf-8"><title>${esc(S.rep.profile.ragione_sociale)} — Report</title>${css}</head><body class="ir-print"><article class="ir-paper">${paper.innerHTML}</article></body></html>`);
+    w.document.write(`<!doctype html><html lang="it"><head><meta charset="utf-8"><title>${esc(S.rep.profile.ragione_sociale)} — Report</title>${css}</head><body class="ir-print"><table class="ir-print-frame"><thead><tr><td><div class="ir-print-space"></div></td></tr></thead><tbody><tr><td><article class="ir-paper">${paper.innerHTML}</article></td></tr></tbody><tfoot><tr><td><div class="ir-print-space"></div></td></tr></tfoot></table></body></html>`);
     w.document.close();
     setTimeout(() => w.print(), 600);
   }

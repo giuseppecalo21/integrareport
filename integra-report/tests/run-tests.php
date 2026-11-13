@@ -94,6 +94,21 @@ $s['overrides']['SP_D7@2024'] = ['type' => 'manual', 'value' => 225000, 'note' =
 $r = IR_Dataset::resolve($s);
 check('correzione manuale applicata e tracciata', $r['SP_D7@2024']['value'] == 225000 && $r['SP_D7@2024']['status'] === 'manual');
 
+$s = base_state();
+foreach ($s['extraction']['candidates'] as &$c) {
+    if ($c['code'] === 'SP_CIV' && $c['period'] === '2024') {
+        $c['value'] += 1000000;
+    }
+}
+unset($c);
+$c5 = (new IR_Calculator($s, IR_Dataset::resolve($s)))->run();
+check('cassa netta (PFN negativa): effetto leva non applicabile, con motivo', $c5['nodes']['PFN@2024']['value'] < 0 && $c5['nodes']['LEVA@2024']['value'] === null && str_contains((string) $c5['nodes']['LEVA@2024']['nv_reason'], 'cassa netta'));
+check('con PFN positiva l\'effetto leva resta calcolato', $N('PFN@2024') > 0 && $N('LEVA@2024') !== null);
+
+$en = IR_Catalog::enabled_sections(['A1', 'B1']);
+check('§12 non selezionabile con il solo bilancio: nessuna verifica CCII sarebbe eseguibile', !$en['S12']['enabled'] && $en['S3']['enabled']);
+check('§12 disponibile se c\'è almeno un documento che alimenta una verifica', IR_Catalog::enabled_sections(['B1', 'D3'])['S12']['enabled'] && IR_Catalog::enabled_sections(['B1', 'C1'])['S12']['enabled']);
+
 echo "Testo, citazioni e controlli sui numeri\n";
 $p = IR_Document::parse("## Titolo\nIl ROE è [[K:ROE@2024]], ricavi in crescita del 11,1% su 1.350.000 €.\n[[TABELLA:indici_reddituali]]\n- voce [[K:INESISTENTE@2024]]", $calc, $state, ['indici_reddituali', 'zscore']);
 check('i segnaposto diventano riferimenti tracciati', ($p['blocks'][1]['inline'][1]['t'] ?? '') === 'ref');

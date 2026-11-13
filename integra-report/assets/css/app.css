@@ -235,12 +235,20 @@ mark.ir-badref { background: #ffcdd2; }
 /* stampa */
 body.ir-print { background: #fff; margin: 0; }
 body.ir-print .ir-paper { border: 0; padding: 0; }
+/* Margine di pagina a zero: il browser non ha spazio per le proprie intestazioni (data, titolo,
+   "about:blank", numero di pagina). I margini veri sono dati dalla cornice: intestazione e piè
+   di tabella vuoti, che il browser ripete su ogni pagina. */
+@page { size: A4; margin: 0; }
+.ir-print-frame { width: 100%; border-collapse: collapse; }
+.ir-print-frame > tbody > tr > td, .ir-print-frame > thead > tr > td, .ir-print-frame > tfoot > tr > td { padding: 0 15mm; border: 0; }
+.ir-print-space { height: 12mm; }
 @media print {
   body.ir-print .ir-sec-tools, body.ir-print .ir-alert { display: none !important; }
   body.ir-print .ir-doc-sec h1 { page-break-before: always; }
-  body.ir-print .ir-cover { min-height: 95vh; border: 0; page-break-after: always; }
+  body.ir-print .ir-cover { min-height: 250mm; border: 0; page-break-after: always; }
   body.ir-print .ir-ref { background: none; border: 0; }
   body.ir-print a { color: inherit; text-decoration: none; }
+  body.ir-print mark.ir-flag, body.ir-print mark.ir-badref { background: transparent !important; padding: 0; color: inherit; }
   body.ir-print .ir-band { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   body.ir-print .ir-tbl th, body.ir-print .ir-tbl td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }

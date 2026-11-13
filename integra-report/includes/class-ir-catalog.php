@@ -100,7 +100,7 @@ final class IR_Catalog
                 'outline' => ['10.1 Giorni di incasso, pagamento e giacenza', '10.2 Ciclo di conversione di cassa', '10.3 Analisi degli scadenziari', '10.4 Sintesi e implicazioni'], 'tables' => ['ccc', 'aging']],
             'S11' => ['n' => 11, 'title' => 'Analisi Andamentale Bancaria (Centrale Rischi)', 'required' => [['C1']], 'optional' => ['C2', 'C4'], 'kind' => 'analitica', 'attach' => ['C1'],
                 'outline' => ['11.1 Accordato e utilizzato', '11.2 Sconfinamenti e segnali di tensione', '11.3 Sintesi e implicazioni'], 'tables' => ['centrale_rischi']],
-            'S12' => ['n' => 12, 'title' => 'Indicatori della Crisi (art. 3 e art. 25-novies CCII)', 'required' => [['B1']], 'optional' => ['D1', 'D2', 'D3', 'D4', 'D5', 'D8', 'C1'], 'kind' => 'analitica',
+            'S12' => ['n' => 12, 'title' => 'Indicatori della Crisi (art. 3 e art. 25-novies CCII)', 'required' => [['B1'], ['C1', 'D2', 'D3', 'D5', 'D8', 'B3', 'F1', 'F2']], 'optional' => ['D1', 'D4'], 'kind' => 'analitica',
                 'outline' => ['12.1 Verifica delle soglie ex art. 3, comma 4, CCII', '12.2 Verifica delle soglie ex art. 25-novies CCII', '12.3 DSCR (se disponibili dati prospettici)', '12.4 Riepilogo dei segnali attivi', '12.5 Implicazioni operative'], 'tables' => ['ccii']],
             'S13' => ['n' => 13, 'title' => 'DSCR a 12 Mesi Prospettico', 'required' => [['B1'], ['F1', 'F2']], 'optional' => ['F3', 'C3'], 'kind' => 'analitica',
                 'outline' => ['13.1 Ipotesi e dati utilizzati', '13.2 Calcolo del DSCR', '13.3 Commento e soglie', '13.4 Sintesi e implicazioni'], 'tables' => ['dscr']],
