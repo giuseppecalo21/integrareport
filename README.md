@@ -13,7 +13,7 @@ L'obiettivo principale è l'**affidabilità**: ogni numero del report deve esser
 5. **Controlli di quadratura** su ogni esercizio (attivo = passivo, riclassificato = totale di bilancio, A − B = EBIT, risultato ante imposte, utile CE = utile SP, rendiconto...). Un valore letto male fa fallire il controllo.
 6. **Nel testo l'AI non scrive numeri**: usa segnaposto che il plugin sostituisce con i valori calcolati. Qualunque numero scritto "a mano" viene **evidenziato in giallo** come non tracciato. Le affermazioni qualitative tratte dai documenti sono collegate al passaggio citato (citazioni dell'API).
 7. **Correzioni manuali solo con nota obbligatoria**: il valore originale e l'autore restano nella traccia.
-8. **Tracciabilità cliccabile**: nell'interfaccia ogni numero apre un pannello con formula → valori → dato → documento e pagina (con pulsante "Apri il documento a pagina N"). Nel file Word ogni numero è un collegamento interno alle appendici: *A — Tracciabilità dei calcoli*, *B — Registro dei dati estratti*, *C — Citazioni documentali*.
+8. **Tracciabilità cliccabile**: nell'interfaccia ogni numero apre un pannello con formula → valori → dato → documento e pagina (con pulsante "Apri il documento a pagina N"). Nel file Word ogni numero è un collegamento interno alle appendici: *A — Tracciabilità dei calcoli*, *B — Registro dei dati estratti*, *C — Citazioni documentali*. Le stesse appendici compaiono in coda al visualizzatore e nella stampa/PDF del browser, con la medesima numerazione delle citazioni.
 
 ## Il percorso (sempre uguale)
 
@@ -51,6 +51,14 @@ I documenti vengono inviati alle API di Anthropic per l'elaborazione: verifica c
 ### Elaborazione in background
 
 Il plugin avvia i lavori lunghi con una richiesta "loopback" al proprio sito. Se l'hosting la blocca, dopo 15 secondi il browser esegue il lavoro direttamente (in questo caso è meglio tenere aperta la pagina fino al termine).
+
+### Ripresa dei lavori interrotti
+
+Durante le chiamate lunghe il lavoro aggiorna un segnale di vita. Se il processo viene interrotto dal server (timeout dell'hosting), dopo cinque minuti senza segnale il browser lo fa ripartire dal punto di arresto: documenti e capitoli già completati non vengono rielaborati. Per la stesura sono disponibili anche *Riprendi la stesura* e *Completa i capitoli mancanti*, che riscrivono solo i capitoli in errore o mai generati. Un capitolo previsto ma non generato viene sempre dichiarato: avviso nel visualizzatore e voce *Capitoli non generati* nella Checklist del documento.
+
+### Modelli e costi
+
+In *Impostazioni* si sceglie un modello generale e, facoltativamente, un modello distinto per l'estrazione dei dati e per la stesura. Senza scelta esplicita le due fasi usano il modello generale.
 
 ## Parametri normativi
 

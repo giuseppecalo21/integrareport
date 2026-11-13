@@ -134,23 +134,44 @@ final class IR_Tables
 
     // ------------------------------------------------------------------ tabelle
 
+    /** Campi dell'anagrafica, nell'ordine di esposizione. */
+    private const ANAGRAFICA_FIELDS = ['ragione_sociale', 'forma_giuridica', 'codice_fiscale', 'partita_iva', 'rea', 'pec', 'sede_legale', 'sedi_operative', 'data_costituzione', 'stato_attivita', 'ateco', 'capitale_sociale', 'addetti', 'organo_controllo', 'durc'];
+    /** Priorità delle fonti per i dati anagrafici: la visura è il documento ufficiale e più aggiornato. */
+    private const ANAGRAFICA_SOURCES = ['A1', 'B1', 'A4', 'A2'];
+
+    /**
+     * Una riga per campo. Se lo stesso campo è riportato da più documenti (visura, bilancio,
+     * organigramma, atto costitutivo) vale la fonte con priorità più alta; a parità di categoria,
+     * il file caricato per ultimo. Le altre versioni restano consultabili nel registro dei dati.
+     */
     private function t_anagrafica(): ?array
     {
         $fields = IR_Catalog::info_fields();
-        $rows = [];
-        $seen = [];
-        foreach ($this->state['extraction']['info'] ?? [] as $i) {
-            if (!in_array($i['field'], ['ragione_sociale', 'forma_giuridica', 'codice_fiscale', 'partita_iva', 'rea', 'pec', 'sede_legale', 'sedi_operative', 'data_costituzione', 'stato_attivita', 'ateco', 'capitale_sociale', 'addetti', 'organo_controllo', 'durc'], true)) {
-                continue;
-            }
-            $k = $i['field'] . '|' . mb_strtolower(trim($i['value']));
-            if (isset($seen[$k])) {
-                continue;
-            }
-            $seen[$k] = true;
-            $rows[] = ['label' => $fields[$i['field']] ?? $i['field'], 'cells' => [['v' => $i['value'], 'ref' => 'I:' . $i['id'], 'level' => null]]];
+        $uploaded = [];
+        foreach ($this->state['files'] ?? [] as $f) {
+            $uploaded[$f['id']] = (int) ($f['uploaded_at'] ?? 0);
         }
-        return ['title' => 'Anagrafica societaria', 'columns' => ['Elemento', 'Dato (con fonte)'], 'rows' => $rows, 'notes' => ['Dati riportati dai documenti indicati in fonte, senza rielaborazioni.']];
+        $rank = static function (array $i) use ($uploaded): array {
+            $p = array_search($i['slot'] ?? '', self::ANAGRAFICA_SOURCES, true);
+            return [$p === false ? count(self::ANAGRAFICA_SOURCES) : $p, -($uploaded[$i['file_id'] ?? ''] ?? 0)];
+        };
+        $best = [];
+        foreach ($this->state['extraction']['info'] ?? [] as $i) {
+            if (!in_array($i['field'], self::ANAGRAFICA_FIELDS, true) || trim((string) $i['value']) === '') {
+                continue;
+            }
+            if (!isset($best[$i['field']]) || $rank($i) < $rank($best[$i['field']])) {
+                $best[$i['field']] = $i;
+            }
+        }
+        $rows = [];
+        foreach (self::ANAGRAFICA_FIELDS as $field) {
+            if (isset($best[$field])) {
+                $i = $best[$field];
+                $rows[] = ['label' => $fields[$field] ?? $field, 'cells' => [['v' => $i['value'], 'ref' => 'I:' . $i['id'], 'level' => null]]];
+            }
+        }
+        return ['title' => 'Anagrafica societaria', 'columns' => ['Elemento', 'Dato (con fonte)'], 'rows' => $rows, 'notes' => ['Dati riportati dai documenti indicati in fonte, senza rielaborazioni. Per i dati presenti in più documenti è esposto quello della fonte più autorevole (visura camerale, quindi bilancio, organigramma e atto costitutivo).']];
     }
 
     private function t_concentrazione(): ?array

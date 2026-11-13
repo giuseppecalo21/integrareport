@@ -7,7 +7,7 @@
 if (!defined('WP_UNINSTALL_PLUGIN')) {
     exit;
 }
-foreach (['ir_api_key', 'ir_model', 'ir_effort_extract', 'ir_effort_write', 'ir_studio', 'ir_sito', 'ir_consulente', 'ir_max_mb', 'ir_params_override'] as $o) {
+foreach (['ir_api_key', 'ir_model', 'ir_model_extract', 'ir_model_write', 'ir_effort_extract', 'ir_effort_write', 'ir_studio', 'ir_sito', 'ir_consulente', 'ir_max_mb', 'ir_params_override'] as $o) {
     delete_option($o);
 }
 foreach (['administrator', 'editor'] as $r) {

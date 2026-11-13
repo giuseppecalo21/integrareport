@@ -24,8 +24,7 @@ final class IR_Docx
     private array $calc;
     private array $bm = [];          // ref => nome segnalibro
     private array $rels = [];        // collegamenti esterni
-    private array $citeIndex = [];   // "sid:n" => numero globale
-    private array $cites = [];       // numero globale => citazione
+    private array $citeBase = [];    // sezione => scostamento della numerazione globale delle citazioni
     private int $bmId = 1;
 
     public function __construct(array $state)
@@ -52,13 +51,13 @@ final class IR_Docx
         if (!class_exists('ZipArchive')) {
             throw new RuntimeException('Estensione PHP zip non disponibile sul server.');
         }
-        $refs = $this->closure(IR_Document::used_refs($this->model));
+        $refs = $this->model['appendices']['refs'];
         $i = 0;
         foreach ($refs as $r) {
             $this->bm[$r] = 'ir_r' . (++$i);
         }
 
-        $body = $this->cover() . $this->content($refs);
+        $body = $this->cover() . $this->content();
         $doc = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             . '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
             . '<w:body>' . $body . '</w:body></w:document>';
@@ -78,31 +77,6 @@ final class IR_Docx
         $zip->addFromString('word/_rels/document.xml.rels', $this->doc_rels());
         $zip->close();
         return $tmp;
-    }
-
-    /** Chiusura transitiva dei riferimenti: ogni indicatore porta con sé i suoi ingressi. */
-    private function closure(array $refs): array
-    {
-        $out = [];
-        $queue = $refs;
-        while ($queue) {
-            $r = array_shift($queue);
-            if (isset($out[$r])) {
-                continue;
-            }
-            $out[$r] = true;
-            if (str_starts_with($r, 'K:')) {
-                foreach ($this->calc['nodes'][substr($r, 2)]['inputs'] ?? [] as $in) {
-                    if (!empty($in['ref'])) {
-                        $queue[] = $in['ref'];
-                    }
-                }
-            }
-        }
-        $k = array_values(array_filter(array_keys($out), fn($r) => str_starts_with($r, 'K:')));
-        $v = array_values(array_filter(array_keys($out), fn($r) => str_starts_with($r, 'V:')));
-        $i = array_values(array_filter(array_keys($out), fn($r) => str_starts_with($r, 'I:')));
-        return array_merge($k, $v, $i);
     }
 
     // ------------------------------------------------------------------ primitive
@@ -211,9 +185,8 @@ final class IR_Docx
                     $out .= $this->ext_link($r['v'], $r['href']);
                     break;
                 case 'cite':
-                    $key = $sid . ':' . $r['c'];
-                    $n = $this->citeIndex[$key] ?? null;
-                    if ($n !== null) {
+                    if (isset($this->citeBase[$sid])) {
+                        $n = $this->citeBase[$sid] + $r['c'] + 1;
                         $out .= '<w:hyperlink w:anchor="ir_c' . $n . '">' . $this->run('[' . $n . ']', ['sup' => true, 'color' => self::BLUE]) . '</w:hyperlink>';
                     }
                     break;
@@ -344,16 +317,12 @@ final class IR_Docx
         return $this->para('', ['border' => true, 'spacing' => [0, 0], 'pagebreak' => $pagebreak]) . $this->para($this->run($text), ['style' => 'Heading1', 'keep' => true]);
     }
 
-    private function content(array $refs): string
+    private function content(): string
     {
         $m = $this->model;
-        // numerazione globale delle citazioni
-        $n = 0;
+        $ap = $m['appendices'];
         foreach ($m['sections'] as $s) {
-            foreach ($s['citations'] as $ci => $c) {
-                $this->citeIndex[$s['id'] . ':' . $ci] = ++$n;
-                $this->cites[$n] = $c;
-            }
+            $this->citeBase[$s['id']] = $s['cite_base'];
         }
 
         $x = '';
@@ -364,7 +333,11 @@ final class IR_Docx
         foreach ($m['sections'] as $s) {
             $x .= $this->para($this->run($s['title']));
         }
-        foreach (['Checklist delle operazioni', 'Fonti normative e bibliografia', 'Disclaimer professionale', 'Appendice A — Tracciabilità dei calcoli', 'Appendice B — Registro dei dati estratti', 'Appendice C — Citazioni documentali'] as $t) {
+        $tail = ['Checklist delle operazioni', 'Fonti normative e bibliografia', 'Disclaimer professionale', $ap['calc']['title'], $ap['data']['title']];
+        if ($ap['cites']['entries']) {
+            $tail[] = $ap['cites']['title'];
+        }
+        foreach ($tail as $t) {
             $x .= $this->para($this->run($t));
         }
         $x .= '<w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>';
@@ -385,155 +358,47 @@ final class IR_Docx
         $x .= $this->h1('Disclaimer professionale');
         $x .= $this->blocks($m['disclaimer']);
 
-        $x .= $this->appendix_calc($refs);
-        $x .= $this->appendix_data($refs);
-        $x .= $this->appendix_cites();
+        $x .= $this->appendix($ap['calc']);
+        $x .= $this->appendix($ap['data']);
+        if ($ap['cites']['entries']) {
+            $x .= $this->appendix_cites($ap['cites']);
+        }
 
         $sect = '<w:sectPr><w:headerReference w:type="default" r:id="rIdH1"/><w:footerReference w:type="default" r:id="rIdF1"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="567" w:footer="567" w:gutter="0"/></w:sectPr>';
         return $x . $sect;
     }
 
-    private function input_value(array $in): string
+    /** Appendici A e B: una voce per riferimento, con segnalibro di destinazione dei collegamenti. */
+    private function appendix(array $ap): string
     {
-        if (!empty($in['param'])) {
-            $v = (float) $in['value'];
-            return abs($v) < 1 && $v != 0.0 ? IR_Format::num($v * 100, 4) . '%' : IR_Format::num($v, 2);
-        }
-        if ($in['ref'] && str_starts_with($in['ref'], 'K:')) {
-            $n = $this->calc['nodes'][substr($in['ref'], 2)] ?? null;
-            return $n && $n['value'] !== null ? ($n['display'] ?? IR_Format::value($n['value'], $n['unit'])) : 'non disponibile';
-        }
-        if ($in['ref'] && str_starts_with($in['ref'], 'V:')) {
-            $e = $this->calc['data'][substr($in['ref'], 2)] ?? null;
-            return $e && $e['value'] !== null ? IR_Format::value($e['value'], $e['unit']) : 'non disponibile';
-        }
-        return $in['value'] === null ? 'non disponibile' : IR_Format::num((float) $in['value'], 2);
-    }
-
-    private function appendix_calc(array $refs): string
-    {
-        $x = $this->h1('Appendice A — Tracciabilità dei calcoli');
-        $x .= $this->para($this->run('Per ogni indicatore citato nel report: formula applicata, valori utilizzati (con collegamento alla rispettiva fonte), risultato ed eventuale soglia di valutazione. I calcoli sono eseguiti senza arrotondamenti intermedi; i valori sono esposti con ' . IR_Format::rounding_note('eur') . ', percentuali e indici con 1-2 decimali.'), ['jc' => 'both']);
-        foreach ($refs as $r) {
-            if (!str_starts_with($r, 'K:')) {
-                continue;
+        $x = $this->h1($ap['title']);
+        $x .= $this->para($this->run($ap['intro']), ['jc' => 'both']);
+        foreach ($ap['entries'] as $e) {
+            $head = $this->run($e['label'] . ': ', ['b' => true, 'color' => self::GRAY]) . $this->run($e['value'], ['b' => true, 'color' => self::BLUE]);
+            $x .= $this->para($this->bookmark($this->bm[$e['ref']], $head), ['keep' => true, 'spacing' => [200, 40]]);
+            if (isset($e['formula'])) {
+                $x .= $this->para($this->run('Formula: ', ['b' => true]) . $this->run($e['formula']), ['style' => 'IrSmall']);
             }
-            $n = $this->calc['nodes'][substr($r, 2)] ?? null;
-            if (!$n) {
-                continue;
+            foreach ($e['inputs'] ?? [] as $in) {
+                $src = $in['ref'] ? $this->ref_run($in['ref'], $in['value']) : $this->run($in['value']);
+                $x .= $this->para($this->run($in['sym'] . ' = ') . $src . $this->run($in['desc'], ['color' => self::GRAY]), ['style' => 'IrSmall', 'num' => 1]);
             }
-            $val = $n['value'] === null ? 'non valutabile' : ($n['display'] ?? IR_Format::value($n['value'], $n['unit']));
-            $head = $this->run($n['label'] . ' — ' . IR_Format::period_label($n['period']) . ': ', ['b' => true, 'color' => self::GRAY]) . $this->run($val, ['b' => true, 'color' => self::BLUE]);
-            $x .= $this->para($this->bookmark($this->bm[$r], $head), ['keep' => true, 'spacing' => [200, 40]]);
-            $x .= $this->para($this->run('Formula: ', ['b' => true]) . $this->run($n['formula']), ['style' => 'IrSmall']);
-            foreach ($n['inputs'] as $in) {
-                $label = $in['sym'] . ' = ';
-                $v = $this->input_value($in);
-                $src = $in['ref'] ? $this->ref_run($in['ref'], $v) : $this->run($v);
-                $desc = $in['param'] ? ' (parametro del modello — ' . $in['param'] . ')' : ' — ' . $in['label'];
-                $x .= $this->para($this->run($label) . $src . $this->run($desc, ['color' => self::GRAY]), ['style' => 'IrSmall', 'num' => 1]);
-            }
-            if ($n['value'] === null) {
-                $why = $n['nv_reason'] ?: implode('; ', $n['missing']);
-                $x .= $this->para($this->run('Non valutabile: ', ['b' => true]) . $this->run($why), ['style' => 'IrSmall']);
-            }
-            if ($n['eval']) {
-                $x .= $this->para($this->run('Valutazione: ', ['b' => true]) . $this->run($n['eval']['text'] . ' — ' . $n['eval']['soglia'] . ' (fonte: ' . $n['eval']['fonte'] . ')'), ['style' => 'IrSmall']);
-            }
-            if ($n['note']) {
-                $x .= $this->para($this->run('Nota: ', ['b' => true]) . $this->run($n['note']), ['style' => 'IrSmall']);
+            foreach ($e['lines'] as $l) {
+                $o = $l['style'] === 'i' ? ['i' => true] : ($l['style'] === 'muted' ? ['color' => self::GRAY] : []);
+                $x .= $this->para(($l['k'] !== '' ? $this->run($l['k'] . ': ', ['b' => true]) : '') . $this->run($l['v'], $o), ['style' => 'IrSmall']);
             }
         }
         return $x;
     }
 
-    private function file_label(?string $file_id): string
+    private function appendix_cites(array $ap): string
     {
-        foreach ($this->state['files'] as $f) {
-            if ($f['id'] === $file_id) {
-                return $f['slot'] . ' — ' . (IR_Catalog::documents()[$f['slot']]['name'] ?? '') . ' — file "' . $f['name'] . '"';
-            }
-        }
-        return 'documento non più presente';
-    }
-
-    private function appendix_data(array $refs): string
-    {
-        $x = $this->h1('Appendice B — Registro dei dati estratti');
-        $x .= $this->para($this->run('Per ogni dato utilizzato: documento di provenienza, pagina o posizione, citazione testuale, livello di affidabilità ed eventuali interventi manuali del consulente.'), ['jc' => 'both']);
-        foreach ($refs as $r) {
-            if (str_starts_with($r, 'V:')) {
-                $e = $this->calc['data'][substr($r, 2)] ?? null;
-                if (!$e) {
-                    continue;
-                }
-                $val = $e['value'] === null ? 'non disponibile' : IR_Format::value($e['value'], $e['unit']);
-                $head = $this->run($e['label'] . ' — ' . IR_Format::period_label($e['period']) . ': ', ['b' => true, 'color' => self::GRAY]) . $this->run($val, ['b' => true, 'color' => self::BLUE]);
-                $x .= $this->para($this->bookmark($this->bm[$r], $head), ['keep' => true, 'spacing' => [200, 40]]);
-                $s = $e['source'];
-                if (!empty($s['manual'])) {
-                    $x .= $this->para($this->run('Inserito manualmente da ' . $s['by'] . ' il ' . IR_Format::date_it((int) $s['at']) . '. Motivazione: ' . $s['note']), ['style' => 'IrSmall']);
-                } elseif ($s) {
-                    $pos = $s['page'] ? 'pag. ' . $s['page'] : ($s['pos'] ?: 'posizione n.d.');
-                    if ($s['page'] && $s['pos']) {
-                        $pos .= ', ' . $s['pos'];
-                    }
-                    $x .= $this->para($this->run('Fonte: ', ['b' => true]) . $this->run($this->file_label($s['file_id']) . ' — ' . $pos), ['style' => 'IrSmall']);
-                    $x .= $this->para($this->run('Citazione: ', ['b' => true]) . $this->run('«' . $s['quote'] . '»', ['i' => true]), ['style' => 'IrSmall']);
-                    $extra = 'Affidabilità: ' . $s['aff'];
-                    if ($s['stato'] === 'assente') {
-                        $extra .= ' — voce non presente nel prospetto (valore zero per omissione ex art. 2423-ter c.c.)';
-                    }
-                    if ($s['scale'] != 1) {
-                        $extra .= ' — valore stampato ' . IR_Format::num($s['raw'], 2) . ' × ' . IR_Format::num($s['scale'], 0) . ' (scala del documento)';
-                    }
-                    if ($e['confirmations'] > 1) {
-                        $extra .= ' — confermato da ' . $e['confirmations'] . ' fonti concordi';
-                    }
-                    if ($e['status'] === 'chosen') {
-                        $extra .= ' — scelto dal consulente tra fonti discordanti';
-                    }
-                    if (!empty($e['verified'])) {
-                        $extra .= ' — verificato da ' . $e['verified']['by'] . ' il ' . IR_Format::date_it((int) $e['verified']['at']);
-                    }
-                    if ($s['note']) {
-                        $extra .= ' — ' . $s['note'];
-                    }
-                    $x .= $this->para($this->run($extra, ['color' => self::GRAY]), ['style' => 'IrSmall']);
-                }
-            } elseif (str_starts_with($r, 'I:')) {
-                foreach ($this->state['extraction']['info'] as $i) {
-                    if ('I:' . $i['id'] === $r) {
-                        $head = $this->run((IR_Catalog::info_fields()[$i['field']] ?? $i['field']) . ': ', ['b' => true, 'color' => self::GRAY]) . $this->run($i['value'], ['b' => true, 'color' => self::BLUE]);
-                        $x .= $this->para($this->bookmark($this->bm[$r], $head), ['keep' => true, 'spacing' => [200, 40]]);
-                        $pos = $i['page'] ? 'pag. ' . $i['page'] : ($i['pos'] ?: 'posizione n.d.');
-                        $x .= $this->para($this->run('Fonte: ', ['b' => true]) . $this->run($this->file_label($i['file_id']) . ' — ' . $pos), ['style' => 'IrSmall']);
-                        $x .= $this->para($this->run('Citazione: ', ['b' => true]) . $this->run('«' . $i['quote'] . '»', ['i' => true]), ['style' => 'IrSmall']);
-                    }
-                }
-            }
-        }
-        return $x;
-    }
-
-    private function appendix_cites(): string
-    {
-        if (!$this->cites) {
-            return '';
-        }
-        $x = $this->h1('Appendice C — Citazioni documentali');
-        $x .= $this->para($this->run('Passaggi dei documenti a supporto delle affermazioni qualitative, numerati come nel testo.'));
-        foreach ($this->cites as $n => $c) {
-            $src = match ($c['src']['kind'] ?? '') {
-                'file' => $this->file_label($c['src']['file_id']),
-                'interview' => 'Note dell\'intervista al management',
-                'norm' => 'Riferimento normativo interno (aggiornato a maggio 2026)',
-                default => $c['title'],
-            };
-            $pg = $c['page_start'] ? ' — pag. ' . $c['page_start'] . (($c['page_end'] && $c['page_end'] != $c['page_start']) ? '-' . $c['page_end'] : '') : '';
-            $head = $this->run('[' . $n . '] ', ['b' => true, 'color' => self::BLUE]) . $this->run($src . $pg, ['b' => true]);
-            $x .= $this->para($this->bookmark('ir_c' . $n, $head), ['style' => 'IrSmall', 'keep' => true]);
-            $x .= $this->para($this->run('«' . trim($c['cited_text']) . '»', ['i' => true]), ['style' => 'IrSmall']);
+        $x = $this->h1($ap['title']);
+        $x .= $this->para($this->run($ap['intro']));
+        foreach ($ap['entries'] as $c) {
+            $head = $this->run('[' . $c['n'] . '] ', ['b' => true, 'color' => self::BLUE]) . $this->run($c['source'], ['b' => true]);
+            $x .= $this->para($this->bookmark('ir_c' . $c['n'], $head), ['style' => 'IrSmall', 'keep' => true]);
+            $x .= $this->para($this->run($c['text'], ['i' => true]), ['style' => 'IrSmall']);
         }
         return $x;
     }

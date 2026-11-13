@@ -103,6 +103,33 @@ check('le tabelle non collocate dal modello vengono aggiunte in coda', end($p['b
 check('controllo citazione: numero presente', IR_Extractor::citation_contains_number('1) ricavi delle vendite 1.500.000', 1500000));
 check('controllo citazione: numero assente', !IR_Extractor::citation_contains_number('ricavi 1.530.000', 1350000));
 
+$flag = fn(string $t) => count(array_filter(IR_Document::parse($t, $calc, $state, [])['warnings'], fn($w) => str_contains($w, 'senza collegamento')));
+check('estremi di norme e atti non sono segnalati come numeri senza fonte', $flag('Atto del notaio, rep. n. 616.973, ai sensi della Legge 8 novembre 1991 n. 1.381 e del provvedimento n. 1.234/2019; iscrizione n. 12.345.') === 0);
+check('importi, percentuali e quantità restano segnalati anche vicino a un riferimento normativo', $flag('Ai sensi dell\'art. 2086 il capitale è di L. 7.000.000, i ricavi 1.350.000 €, il margine 11,1% e le azioni sono n. 1.200.') === 4);
+check('un importo in euro non è mai scambiato per un estremo normativo', $flag('rep. n. 616.973 euro') === 1);
+
+echo "Anagrafica: una riga per campo, dalla fonte più autorevole\n";
+$s = base_state();
+$s['files'][] = ['id' => 'fA1', 'slot' => 'A1', 'name' => 'visura.pdf', 'stored' => 'v.pdf', 'ext' => 'pdf', 'size' => 1, 'uploaded_at' => time(), 'extraction' => ['status' => 'done']];
+$mk = fn($id, $field, $value, $slot, $file) => ['id' => $id, 'field' => $field, 'value' => $value, 'file_id' => $file, 'slot' => $slot, 'page' => 1, 'pos' => '', 'quote' => $value];
+$s['extraction']['info'] = [
+    $mk('a2r', 'ragione_sociale', 'CONSOLIDA CONSORZIO S.C.R.L.', 'A2', 'fA2'),
+    $mk('a2c', 'capitale_sociale', 'L. 7.000.000', 'A2', 'fA2'),
+    $mk('b1r', 'ragione_sociale', 'CONSORZIO CONSOLIDA SOCIETA\' COOPERATIVA SOCIALE', 'B1', 'f24'),
+    $mk('b1c', 'capitale_sociale', 'Euro 164.100', 'B1', 'f24'),
+    $mk('a4r', 'ragione_sociale', 'Consorzio Consolida', 'A4', 'fA4'),
+    $mk('a1r', 'ragione_sociale', 'CONSORZIO CONSOLIDA - SOCIETA\' COOPERATIVA SOCIALE', 'A1', 'fA1'),
+    $mk('a1s', 'sede_legale', 'Lecco (LC), Via Belvedere 19', 'A1', 'fA1'),
+    $mk('b1s', 'sede_legale', 'Via Belvedere 19, 23900 Lecco (LC)', 'B1', 'f24'),
+    $mk('a2o', 'oggetto_sociale', 'non anagrafico', 'A2', 'fA2'),
+];
+$t = (new IR_Tables($s, $calc))->build('anagrafica');
+$labels = array_column($t['rows'], 'label');
+$byLabel = array_combine($labels, array_map(fn($r) => $r['cells'][0]['ref'], $t['rows']));
+check('nessuna riga ripetuta', count($labels) === count(array_unique($labels)) && count($labels) === 3);
+check('la visura prevale su bilancio, organigramma e atto costitutivo', $byLabel['Ragione sociale / denominazione'] === 'I:a1r' && $byLabel['Sede legale'] === 'I:a1s');
+check('in assenza della visura vale il bilancio, non l\'atto costitutivo', $byLabel['Capitale sociale (deliberato/sottoscritto/versato)'] === 'I:b1c');
+
 echo "Esportazione Word\n";
 $state['kpi'] = $calc;
 $tb = new IR_Tables($state, $calc);
@@ -131,6 +158,26 @@ preg_match_all('/w:anchor="([^"]+)"/', $xml, $a);
 preg_match_all('/w:name="([^"]+)"/', $xml, $b);
 check('tutte le parti XML del .docx sono ben formate', $wellFormed);
 check('ogni collegamento interno ha la sua voce di tracciabilità', !array_diff(array_unique($a[1]), $b[1]) && count($a[1]) > 50);
+
+echo "Documento: checklist, appendici, capitoli non generati\n";
+$model = IR_Document::build($state);
+$ap = $model['appendices'];
+check('il modello condiviso contiene le tre appendici', count($ap['calc']['entries']) > 10 && count($ap['data']['entries']) > 10 && count($ap['cites']['entries']) === count($model['sections']));
+check('le citazioni hanno numerazione unica e progressiva', array_column($ap['cites']['entries'], 'n') === range(1, count($model['sections'])) && $model['sections'][2]['cite_base'] === 2);
+check('ogni riferimento del testo ha la sua voce in appendice', !array_diff(IR_Document::used_refs($model), array_merge(array_column($ap['calc']['entries'], 'ref'), array_column($ap['data']['entries'], 'ref'))));
+check('report completo: nessun capitolo in sospeso', $model['pending'] === []);
+
+$bad = $state;
+$bad['report']['sections']['S4'] = ['status' => 'error', 'error' => 'Servizio sovraccarico (529)', 'at' => time()];
+unset($bad['report']['sections']['S5'], $bad['report']['sections']['S0']);
+$bad['report']['sections']['S12'] = ['status' => 'skipped', 'reason' => 'nessun indicatore calcolabile', 'at' => time()];
+$mb = IR_Document::build($bad);
+$txt = json_encode($mb['checklist'], JSON_UNESCAPED_UNICODE);
+check('capitolo in errore: escluso dal testo ma riportato nella checklist con il motivo', !in_array('S4', array_column($mb['sections'], 'id'), true) && str_contains($txt, 'Errore di generazione: Servizio sovraccarico (529)'));
+check('capitolo mai scritto (lavoro interrotto) e sommario mancante: riportati nella checklist', str_contains($txt, '§5 Analisi per Indici — Stesura non eseguita') && str_contains($txt, 'Sommario esecutivo — Stesura non eseguita'));
+check('i capitoli da completare sono esattamente quelli in errore o mancanti', array_column($mb['pending'], 'id') === ['S0', 'S4', 'S5']);
+check('un capitolo escluso per mancanza di dati non è un errore', !in_array('S12', array_column($mb['pending'], 'id'), true) && str_contains($txt, 'sezione esclusa per non presentare'));
+file_put_contents(sys_get_temp_dir() . '/ir-test-model.json', json_encode(['ok' => $model, 'bad' => $mb], JSON_UNESCAPED_UNICODE));
 
 echo "\n$ok superati, $fail falliti\n";
 exit($fail ? 1 : 0);

@@ -21,6 +21,9 @@ final class IR_Admin
         $text = ['type' => 'string', 'sanitize_callback' => 'sanitize_text_field'];
         register_setting('ir_settings', 'ir_api_key', ['type' => 'string', 'sanitize_callback' => [self::class, 'sanitize_key']]);
         register_setting('ir_settings', 'ir_model', ['type' => 'string', 'sanitize_callback' => fn($v) => isset(IR_Claude::MODELS[$v]) ? $v : 'claude-opus-5-5', 'default' => 'claude-opus-5-5']);
+        foreach (['extract', 'write'] as $purpose) {
+            register_setting('ir_settings', 'ir_model_' . $purpose, ['type' => 'string', 'sanitize_callback' => fn($v) => isset(IR_Claude::MODELS[$v]) ? $v : '', 'default' => '']);
+        }
         register_setting('ir_settings', 'ir_effort_extract', ['type' => 'string', 'sanitize_callback' => fn($v) => isset(IR_Claude::EFFORTS[$v]) ? $v : 'high', 'default' => 'high']);
         register_setting('ir_settings', 'ir_effort_write', ['type' => 'string', 'sanitize_callback' => fn($v) => isset(IR_Claude::EFFORTS[$v]) ? $v : 'high', 'default' => 'high']);
         register_setting('ir_settings', 'ir_studio', $text);
@@ -75,10 +78,19 @@ final class IR_Admin
             'exts' => IR_Rest::EXTS,
             'maxMb' => (int) get_option('ir_max_mb', 20),
             'hasKey' => IR_Claude::api_key() !== '',
-            'model' => IR_Claude::MODELS[IR_Claude::model()] ?? IR_Claude::model(),
+            'model' => self::model_summary(),
             'user' => $u->display_name,
             'settingsUrl' => current_user_can('manage_options') ? admin_url('admin.php?page=integra-report-settings') : '',
         ]);
+    }
+
+    /** Etichetta dei modelli in uso, per l'intestazione dell'applicazione. */
+    public static function model_summary(): string
+    {
+        $short = static fn(string $id) => trim((string) preg_replace('/\s*\(.*$/', '', IR_Claude::MODELS[$id] ?? $id));
+        $e = IR_Claude::model('extract');
+        $w = IR_Claude::model('write');
+        return $e === $w ? $short($e) : 'estrazione ' . $short($e) . ' · stesura ' . $short($w);
     }
 
     public static function render_app(): void
@@ -109,12 +121,23 @@ final class IR_Admin
                         <input type="password" id="ir_api_key" name="ir_api_key" class="regular-text" value="" autocomplete="new-password" placeholder="<?php echo $key ? esc_attr('Chiave salvata (…' . substr($key, -4) . ') — lascia vuoto per mantenerla') : 'sk-ant-…'; ?>">
                         <p class="description">Consigliato: definire la chiave in <code>wp-config.php</code> con <code>define('INTEGRA_REPORT_ANTHROPIC_KEY', '…');</code> invece di salvarla nel database. Per cancellare la chiave salvata scrivi un trattino (-).</p>
                     </td></tr>
-                    <tr><th scope="row"><label for="ir_model">Modello</label></th><td>
+                    <tr><th scope="row"><label for="ir_model">Modello generale</label></th><td>
                         <select id="ir_model" name="ir_model">
                             <?php foreach (IR_Claude::MODELS as $id => $label) : ?>
                                 <option value="<?php echo esc_attr($id); ?>" <?php selected(IR_Claude::model(), $id); ?>><?php echo esc_html($label); ?></option>
                             <?php endforeach; ?>
                         </select>
+                    </td></tr>
+                    <tr><th scope="row">Modello per fase</th><td>
+                        <?php foreach (['extract' => 'Estrazione dati', 'write' => 'Stesura'] as $purpose => $plabel) : $cur = (string) get_option('ir_model_' . $purpose, ''); ?>
+                            <label><?php echo esc_html($plabel); ?> <select name="ir_model_<?php echo esc_attr($purpose); ?>">
+                                <option value="" <?php selected($cur, ''); ?>>Come il modello generale</option>
+                                <?php foreach (IR_Claude::MODELS as $id => $label) : ?>
+                                    <option value="<?php echo esc_attr($id); ?>" <?php selected($cur, $id); ?>><?php echo esc_html($label); ?></option>
+                                <?php endforeach; ?>
+                            </select></label> &nbsp;
+                        <?php endforeach; ?>
+                        <p class="description">Le due fasi possono usare modelli diversi per contenere i costi. L'estrazione legge ogni documento per intero ed è la fase in cui un errore di lettura pesa di più: se scegli un modello più economico, controlla con più attenzione i dati a bassa affidabilità e i controlli di quadratura del passo 4. Ogni dato e ogni capitolo riportano il modello che li ha prodotti.</p>
                     </td></tr>
                     <tr><th scope="row">Accuratezza (effort)</th><td>
                         <label>Estrazione dati <select name="ir_effort_extract"><?php foreach (IR_Claude::EFFORTS as $k => $l) : ?><option value="<?php echo esc_attr($k); ?>" <?php selected(IR_Claude::effort('extract'), $k); ?>><?php echo esc_html($l); ?></option><?php endforeach; ?></select></label>

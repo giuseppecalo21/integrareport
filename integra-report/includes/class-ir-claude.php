@@ -3,7 +3,8 @@
  * Wrapper sull'SDK ufficiale Anthropic per PHP.
  * - streaming (evita i timeout HTTP sulle risposte lunghe) con accumulo del messaggio finale;
  * - fallback lato server in caso di rifiuto (beta server-side-fallback-2026-07-01, modalità "default");
- * - prompt caching sul system prompt e, se richiesto, sull'ultimo documento allegato.
+ * - prompt caching sul system prompt e, se richiesto, sull'ultimo documento allegato;
+ * - modello distinto per estrazione e stesura (impostazioni), per contenere i costi.
  */
 
 if (!defined('ABSPATH')) {
@@ -30,10 +31,22 @@ final class IR_Claude
         return (string) get_option('ir_api_key', '');
     }
 
-    public static function model(): string
+    /** Chiamata periodicamente durante lo streaming (segnale di vita per i lavori in background). */
+    public static $onTick = null;
+
+    /**
+     * Modello per scopo ('extract' = lettura dei documenti, 'write' = stesura dei capitoli).
+     * Se per lo scopo non è stato scelto un modello specifico vale quello generale.
+     */
+    public static function model(?string $purpose = null): string
     {
-        $m = (string) get_option('ir_model', 'claude-opus-5-5');
-        return $m !== '' ? $m : 'claude-opus-5-5';
+        $general = (string) get_option('ir_model', 'claude-opus-5-5');
+        $general = isset(self::MODELS[$general]) ? $general : 'claude-opus-5-5';
+        if ($purpose === null) {
+            return $general;
+        }
+        $m = (string) get_option('ir_model_' . $purpose, '');
+        return isset(self::MODELS[$m]) ? $m : $general;
     }
 
     public static function effort(string $purpose): string
@@ -69,7 +82,7 @@ final class IR_Claude
         $stream = $client->beta->messages->createStream(
             maxTokens: 64000,
             messages: [['role' => 'user', 'content' => $content]],
-            model: self::model(),
+            model: self::model($purpose),
             fallbacks: 'default',
             outputConfig: $outputConfig,
             system: [['type' => 'text', 'text' => $system, 'cacheControl' => ['type' => 'ephemeral']]],
@@ -77,8 +90,13 @@ final class IR_Claude
         );
 
         $acc = MessageAccumulator::forBetaMessages();
+        $lastTick = time();
         foreach ($stream as $event) {
             $acc->accumulate($event);
+            if (self::$onTick && time() - $lastTick >= 20) {
+                $lastTick = time();
+                (self::$onTick)();
+            }
         }
         $message = json_decode((string) wp_json_encode($acc->message()), true);
         if (!is_array($message)) {
@@ -112,7 +130,7 @@ final class IR_Claude
                 'cache_read' => (int) ($u['cache_read_input_tokens'] ?? 0),
                 'cache_write' => (int) ($u['cache_creation_input_tokens'] ?? 0),
             ],
-            'model' => (string) ($message['model'] ?? self::model()),
+            'model' => (string) ($message['model'] ?? self::model($purpose)),
             'stop_reason' => $stop,
         ];
     }

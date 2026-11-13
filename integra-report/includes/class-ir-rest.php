@@ -91,7 +91,7 @@ final class IR_Rest
         }
         if (!empty($out['report']['sections'])) {
             foreach ($out['report']['sections'] as $sid => $sec) {
-                $out['report']['sections'][$sid] = array_intersect_key($sec, array_flip(['status', 'title', 'warnings', 'error', 'reason', 'at', 'usage', 'model']));
+                $out['report']['sections'][$sid] = array_intersect_key($sec, array_flip(['status', 'title', 'warnings', 'error', 'reason', 'at', 'usage', 'model', 'rewrite_error']));
             }
         }
         $out['id'] = $id;
@@ -280,6 +280,12 @@ final class IR_Rest
         $items = array_merge($order, ['S0']); // il sommario per ultimo
         if (is_array($only) && $only) {
             $items = array_values(array_intersect($items, $only));
+        } elseif ($req->get_param('resume')) {
+            // ripresa: solo i capitoli in errore o mai scritti; quelli già pronti non si toccano
+            $items = array_values(array_intersect($items, array_column(IR_Document::pending($state), 'id')));
+            if (!$items) {
+                throw new RuntimeException('Tutti i capitoli risultano già generati: non c\'è nulla da completare.');
+            }
         } else {
             IR_Store::mutate($id, function ($s) {
                 $s['report'] = ['sections' => [], 'started_at' => time()];

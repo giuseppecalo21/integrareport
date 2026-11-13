@@ -4,7 +4,9 @@
  * il browser avvia il lavoro, il server lo esegue tramite una richiesta di loopback non bloccante
  * e il browser interroga lo stato. Se il loopback non parte (alcuni hosting lo bloccano), il
  * browser esegue il lavoro direttamente. I lavori sono idempotenti e riprendibili: elaborano solo
- * gli elementi non ancora completati.
+ * gli elementi non ancora completati. Durante le chiamate lunghe il lavoro aggiorna un segnale di
+ * vita (heartbeat): se il processo PHP viene interrotto dal server, dopo STALE secondi il lavoro
+ * risulta fermo e può essere ripreso dal punto in cui si era arrestato, senza ripagare il già fatto.
  */
 
 if (!defined('ABSPATH')) {
@@ -13,10 +15,13 @@ if (!defined('ABSPATH')) {
 
 final class IR_Jobs
 {
+    /** Secondi senza segnale di vita oltre i quali un lavoro "in corso" è considerato fermo. */
+    public const STALE = 300;
+
     public static function start(int $id, string $type, array $items): array
     {
         $job = IR_Store::job($id);
-        if ($job && in_array($job['status'], ['queued', 'running'], true) && (time() - (int) ($job['heartbeat'] ?? $job['created'])) < 600) {
+        if ($job && in_array($job['status'], ['queued', 'running'], true) && (time() - (int) ($job['heartbeat'] ?? $job['created'])) < 2 * self::STALE) {
             throw new RuntimeException('È già in corso un\'elaborazione per questo report.');
         }
         $job = [
@@ -59,7 +64,7 @@ final class IR_Jobs
         if (!$job || !hash_equals((string) $job['token'], $token)) {
             throw new RuntimeException('Token di esecuzione non valido.');
         }
-        if ($job['status'] === 'running' && (time() - (int) $job['heartbeat']) < 300) {
+        if ($job['status'] === 'running' && (time() - (int) $job['heartbeat']) < self::STALE) {
             return self::public_job($job);
         }
         if (!in_array($job['status'], ['queued', 'running'], true)) {
@@ -69,7 +74,7 @@ final class IR_Jobs
         // lock atomico (add_option fallisce se la chiave esiste già)
         $lock = 'ir_job_lock_' . $id;
         $existing = get_option($lock);
-        if ($existing && (time() - (int) $existing) > 900) {
+        if ($existing && (time() - (int) $existing) > self::STALE) {
             delete_option($lock);
         }
         if (!add_option($lock, time(), '', 'no')) {
@@ -87,6 +92,17 @@ final class IR_Jobs
         $job['status'] = 'running';
         $job['heartbeat'] = time();
         IR_Store::save_job($id, $job);
+
+        // segnale di vita durante lo streaming: senza, una singola chiamata lunga farebbe sembrare
+        // fermo un lavoro attivo. Non sovrascrive mai uno stato diverso da "running" (es. annullato).
+        IR_Claude::$onTick = static function () use ($id, $lock) {
+            $fresh = IR_Store::job($id);
+            if ($fresh && ($fresh['status'] ?? '') === 'running') {
+                $fresh['heartbeat'] = time();
+                IR_Store::save_job($id, $fresh);
+                update_option($lock, time(), false);
+            }
+        };
 
         try {
             foreach ($job['items'] as $item) {
@@ -126,6 +142,7 @@ final class IR_Jobs
                 });
             }
         } finally {
+            IR_Claude::$onTick = null;
             $job['current'] = null;
             $job['finished'] = time();
             IR_Store::save_job($id, $job);
@@ -202,7 +219,12 @@ final class IR_Jobs
                 }
                 unset($f);
             } else {
-                $s['report']['sections'][$item] = ['status' => 'error', 'error' => $msg, 'at' => time()];
+                if (($s['report']['sections'][$item]['status'] ?? '') === 'ok') {
+                    // rigenerazione fallita di un capitolo già scritto: si conserva la versione valida
+                    $s['report']['sections'][$item]['rewrite_error'] = ['msg' => $msg, 'at' => time()];
+                } else {
+                    $s['report']['sections'][$item] = ['status' => 'error', 'error' => $msg, 'at' => time()];
+                }
             }
             IR_Store::log($s, "Errore su {$item}: {$msg}");
             return $s;

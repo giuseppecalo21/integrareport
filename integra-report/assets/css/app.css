@@ -222,6 +222,16 @@ mark.ir-badref { background: #ffcdd2; }
   .ir-paper { padding: 24px; }
 }
 
+/* appendici di tracciabilità */
+.ir-appendix { font-size: 12.5px; }
+.ir-ap-entry { margin: 12px 0; break-inside: avoid; }
+.ir-ap-head { font-weight: 700; color: #706f6f; }
+.ir-ap-val { color: #009fe3; }
+.ir-ap-line { margin: 2px 0; overflow-wrap: anywhere; }
+.ir-ap-i { font-style: italic; }
+.ir-ap-inputs { margin: 2px 0 2px 18px; padding: 0; list-style: disc; }
+.ir-ap-inputs li { margin: 1px 0; }
+
 /* stampa */
 body.ir-print { background: #fff; margin: 0; }
 body.ir-print .ir-paper { border: 0; padding: 0; }

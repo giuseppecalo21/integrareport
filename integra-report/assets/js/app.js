@@ -120,6 +120,8 @@
     return j && (j.status === 'queued' || j.status === 'running');
   }
 
+  const STALE = 320; // secondi senza segnale di vita: poco oltre la soglia del server
+
   function startPolling() {
     stopPolling();
     if (!jobActive()) return;
@@ -134,10 +136,25 @@
           S.inlineTried = true;
           api(`/reports/${S.rep.id}/run-inline`, { method: 'POST' }).catch((e) => flash(e.message, 'error'));
         }
+        if (j && j.status === 'running' && Date.now() / 1000 - j.heartbeat > STALE && Date.now() - (S.resumeTried || 0) > 60000) {
+          // il processo sul server si è interrotto (timeout dell'hosting): riprende dal punto di arresto
+          S.resumeTried = Date.now();
+          api(`/reports/${S.rep.id}/run-inline`, { method: 'POST' }).catch(() => {});
+        }
         if (!jobActive()) {
           stopPolling();
-          if (wasType === 'extract') { await loadDataset(); flash('Estrazione completata. Verifica i dati estratti.', 'ok'); }
-          if (wasType === 'write') { await loadDoc(); flash('Report generato.', 'ok'); }
+          const nErr = j && j.errors ? Object.keys(j.errors).length : 0;
+          const cancelled = j && j.status === 'cancelled';
+          if (wasType === 'extract') {
+            await loadDataset();
+            if (nErr) flash(`Estrazione terminata con ${nErr} ${nErr === 1 ? 'documento non elaborato' : 'documenti non elaborati'}: controlla l'elenco e riprova su quelli in errore.`, 'error');
+            else flash(cancelled ? 'Estrazione interrotta.' : 'Estrazione completata. Verifica i dati estratti.', cancelled ? 'info' : 'ok');
+          }
+          if (wasType === 'write') {
+            await loadDoc();
+            if (nErr) flash(`Stesura terminata con ${nErr} ${nErr === 1 ? 'capitolo non generato' : 'capitoli non generati'}: il report è incompleto. Usa "Completa i capitoli mancanti".`, 'error');
+            else flash(cancelled ? 'Stesura interrotta: puoi riprenderla dai capitoli mancanti.' : 'Report generato.', cancelled ? 'info' : 'ok');
+          }
         }
         render();
       } catch (e) { /* rete instabile: riprova al prossimo giro */ }
@@ -542,13 +559,17 @@
     const secs = (r.report && r.report.sections) || {};
     const errors = Object.entries(secs).filter(([, s]) => s.status === 'error');
     const order = Object.keys(C.sections).filter((s) => r.sections_selected.includes(s));
+    const nReady = Object.values(secs).filter((s) => s.status === 'ok' || s.status === 'skipped').length;
     if (!gen && !jobActive()) {
       return `<div class="ir-card ir-center">
         <h2>5. Generazione del report</h2>
         <p>Verranno redatti il Sommario esecutivo e ${order.length} capitoli: ${order.map((s) => '§' + C.sections[s].n).join(', ')}.</p>
         <p class="ir-muted">Ogni capitolo è scritto da Claude a partire dalle tabelle e dagli indicatori approvati: i numeri sono inseriti dal plugin tramite riferimenti tracciati. Tempo indicativo: 1-2 minuti per capitolo.</p>
         ${errors.length ? `<div class="ir-alert ir-alert-error">Errori nella precedente generazione: ${errors.map(([s, e]) => esc(sectionTitle(s) + ': ' + e.error)).join('; ')}</div>` : ''}
-        <button class="button button-primary button-hero" data-a="write" ${S.busy ? 'disabled' : ''}>Genera il report</button>
+        ${nReady ? `<div class="ir-alert ir-alert-info">La stesura precedente si è interrotta: ${nReady} ${nReady === 1 ? 'capitolo è già pronto' : 'capitoli sono già pronti'}. Puoi riprendere dai mancanti senza riscrivere (e ripagare) quelli già fatti.</div>
+        <button class="button button-primary button-hero" data-a="resume" ${S.busy ? 'disabled' : ''}>Riprendi la stesura</button> &nbsp;
+        <button class="button button-large" data-a="write" ${S.busy ? 'disabled' : ''}>Ricomincia da capo</button>`
+    : `<button class="button button-primary button-hero" data-a="write" ${S.busy ? 'disabled' : ''}>Genera il report</button>`}
       </div>`;
     }
     if (jobActive() && j.type === 'write') {
@@ -563,10 +584,13 @@
     const m = d.model;
     const r = S.rep;
     const secs = (r.report && r.report.sections) || {};
-    const errors = Object.entries(secs).filter(([, s]) => s.status === 'error');
+    const pending = m.pending || [];
+    const rewriteErr = Object.entries(secs).filter(([, s]) => s.status === 'ok' && s.rewrite_error);
+    const ap = m.appendices;
+    const apList = ap ? [['ir-ap-calc', ap.calc], ['ir-ap-data', ap.data], ['ir-ap-cites', ap.cites]].filter(([, x]) => x.entries.length) : [];
     const skipped = Object.entries(secs).filter(([, s]) => s.status === 'skipped');
     const allWarn = m.sections.reduce((a, s) => a + s.warnings.length, 0);
-    const toc = ['<li><a href="#ir-premessa">Premessa metodologica</a></li>', ...m.sections.map((s) => `<li><a href="#ir-${s.id}">${esc(s.title)}</a>${s.warnings.length ? ` <span class="ir-badge ir-warn" title="Avvisi">${s.warnings.length}</span>` : ''}</li>`), '<li><a href="#ir-checklist">Checklist delle operazioni</a></li>', '<li><a href="#ir-fonti">Fonti normative</a></li>', '<li><a href="#ir-disclaimer">Disclaimer</a></li>'].join('');
+    const toc = ['<li><a href="#ir-premessa">Premessa metodologica</a></li>', ...m.sections.map((s) => `<li><a href="#ir-${s.id}">${esc(s.title)}</a>${s.warnings.length ? ` <span class="ir-badge ir-warn" title="Avvisi">${s.warnings.length}</span>` : ''}</li>`), '<li><a href="#ir-checklist">Checklist delle operazioni</a></li>', '<li><a href="#ir-fonti">Fonti normative</a></li>', '<li><a href="#ir-disclaimer">Disclaimer</a></li>', ...apList.map(([id, x]) => `<li><a href="#${id}">${esc(x.title)}</a></li>`)].join('');
 
     const sections = m.sections.map((s) => `
       <section id="ir-${s.id}" class="ir-doc-sec">
@@ -584,11 +608,14 @@
           <button class="button" data-a="print">Stampa / PDF</button>
           <button class="button" data-a="write" ${jobActive() ? 'disabled' : ''}>Rigenera tutto</button>
         </div>
-        <p class="ir-muted">Il file Word si apre anche in Google Docs (File › Apri › Carica). Ogni numero è collegato all'appendice di tracciabilità.</p>
+        <p class="ir-muted">Il file Word si apre anche in Google Docs (File › Apri › Carica). Ogni numero è collegato all'appendice di tracciabilità; le appendici sono riportate anche qui e nella stampa.</p>
       </aside>
       <article class="ir-paper">
         ${d.stale ? '<div class="ir-alert ir-alert-warn">I dati o i KPI sono stati modificati dopo la generazione: rigenera i capitoli interessati o l\'intero report.</div>' : ''}
-        ${errors.length ? `<div class="ir-alert ir-alert-error">Capitoli non generati: ${errors.map(([s, e]) => `${esc(sectionTitle(s))} (${esc(e.error)}) <button class="button button-small" data-a="rewrite" data-sid="${s}">Riprova</button>`).join(' · ')}</div>` : ''}
+        ${pending.length ? `<div class="ir-alert ir-alert-error"><strong>Report incompleto: ${pending.length} ${pending.length === 1 ? 'capitolo previsto non è stato generato' : 'capitoli previsti non sono stati generati'}.</strong> Non consegnare il documento in questo stato.
+          <ul>${pending.map((p) => `<li>${esc(p.title)} — ${p.status === 'error' ? 'errore: ' + esc(p.error || 'causa non registrata') : 'stesura non eseguita (elaborazione interrotta)'}</li>`).join('')}</ul>
+          <button class="button button-primary" data-a="resume" ${jobActive() ? 'disabled' : ''}>Completa i capitoli mancanti (${pending.length})</button> <span class="ir-muted">I capitoli già pronti non vengono riscritti.</span></div>` : ''}
+        ${rewriteErr.length ? `<div class="ir-alert ir-alert-warn">Rigenerazione non riuscita, è stata mantenuta la versione precedente: ${rewriteErr.map(([s, e]) => `${esc(sectionTitle(s))} (${esc(e.rewrite_error.msg)})`).join(' · ')}</div>` : ''}
         ${skipped.length ? `<div class="ir-alert ir-alert-info">Capitoli esclusi perché privi di indicatori calcolabili con i documenti forniti: ${skipped.map(([s]) => esc(sectionTitle(s))).join(', ')}. Sono elencati nella checklist finale.</div>` : ''}
         ${allWarn ? `<div class="ir-alert ir-alert-warn">Il testo contiene ${allWarn} avvisi (numeri non collegati a una fonte o riferimenti non validi, evidenziati in giallo/rosso). Verificali prima della consegna.</div>` : ''}
         <div class="ir-cover"><div class="ir-band"></div><div class="ir-cover-body">
@@ -602,8 +629,22 @@
         <section id="ir-checklist" class="ir-doc-sec"><h1>Checklist delle operazioni</h1>${renderBlocks(m.checklist)}</section>
         <section id="ir-fonti" class="ir-doc-sec"><h1>Fonti normative e bibliografia</h1>${renderBlocks(m.fonti)}</section>
         <section id="ir-disclaimer" class="ir-doc-sec"><h1>Disclaimer professionale</h1>${renderBlocks(m.disclaimer)}</section>
+        ${apList.map(([id, x]) => renderAppendix(id, x)).join('')}
       </article>
     </div>`;
+  }
+
+  // Appendici di tracciabilità: stesse voci del file Word (modello condiviso lato server).
+  function renderAppendix(id, ap) {
+    const line = (l) => `<div class="ir-ap-line ${l.style === 'i' ? 'ir-ap-i' : l.style === 'muted' ? 'ir-muted' : ''}">${l.k ? `<strong>${esc(l.k)}:</strong> ` : ''}${esc(l.v)}</div>`;
+    const entries = ap.entries.map((e) => {
+      if (e.n) return `<div class="ir-ap-entry" id="ir-cite-${e.n}"><div class="ir-ap-head"><span class="ir-ap-val">[${e.n}]</span> ${esc(e.source)}</div><div class="ir-ap-line ir-ap-i">${esc(e.text)}</div></div>`;
+      return `<div class="ir-ap-entry"><div class="ir-ap-head">${esc(e.label)}: <span class="ir-ap-val">${esc(e.value)}</span></div>
+        ${e.formula ? `<div class="ir-ap-line"><strong>Formula:</strong> ${esc(e.formula)}</div>` : ''}
+        ${e.inputs && e.inputs.length ? `<ul class="ir-ap-inputs">${e.inputs.map((i) => `<li>${esc(i.sym)} = ${i.ref ? `<a href="#" class="ir-ref" data-a="trace" data-ref="${esc(i.ref)}">${esc(i.value)}</a>` : esc(i.value)}<span class="ir-muted">${esc(i.desc)}</span></li>`).join('')}</ul>` : ''}
+        ${e.lines.map(line).join('')}</div>`;
+    }).join('');
+    return `<section id="${id}" class="ir-doc-sec ir-appendix"><h1>${esc(ap.title)}</h1><p>${esc(ap.intro)}</p>${entries}</section>`;
   }
 
   function renderInline(runs, sec) {
@@ -615,7 +656,7 @@
         case 'flag': return `<mark class="ir-flag" title="Numero scritto senza collegamento a una fonte: verificare">${esc(r.v)}</mark>`;
         case 'bad': return `<mark class="ir-badref">${esc(r.v)}</mark>`;
         case 'link': return `<a href="${esc(r.href)}" target="_blank" rel="noopener">${esc(r.v)}</a>`;
-        case 'cite': return sec ? `<sup><a href="#" class="ir-cite" data-a="cite" data-sid="${sec.id}" data-c="${r.c}">[${r.c + 1}]</a></sup>` : '';
+        case 'cite': return sec ? `<sup><a href="#" class="ir-cite" data-a="cite" data-sid="${sec.id}" data-c="${r.c}">[${(sec.cite_base || 0) + r.c + 1}]</a></sup>` : '';
         default: return '';
       }
     }).join('');
@@ -863,9 +904,10 @@
         break;
       }
       case 'write':
-        if (S.rep.report && S.rep.report.generated_at && !confirm('Rigenerare l\'intero report? Il testo attuale sarà sostituito.')) return;
+        if (S.rep.report && (S.rep.report.generated_at || Object.keys(S.rep.report.sections || {}).length) && !confirm('Rigenerare l\'intero report? Tutti i capitoli già scritti saranno sostituiti e la stesura verrà rieseguita per intero.')) return;
         guard(async () => { const r = await api(`/reports/${S.rep.id}/write`, { method: 'POST', json: {} }); S.rep.job = r.job; S.rep.report = { sections: {} }; startPolling(); });
         break;
+      case 'resume': guard(async () => { const r = await api(`/reports/${S.rep.id}/write`, { method: 'POST', json: { resume: true } }); S.rep.job = r.job; startPolling(); }); break;
       case 'rewrite': guard(async () => { const r = await api(`/reports/${S.rep.id}/write`, { method: 'POST', json: { sections: [el.dataset.sid] } }); S.rep.job = r.job; startPolling(); }); break;
       case 'print': printReport(); break;
     }
