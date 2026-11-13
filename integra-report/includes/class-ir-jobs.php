@@ -18,7 +18,7 @@ final class IR_Jobs
     /** Secondi senza segnale di vita oltre i quali un lavoro "in corso" è considerato fermo. */
     public const STALE = 300;
 
-    public static function start(int $id, string $type, array $items): array
+    public static function start(int $id, string $type, array $items, bool $fresh = false): array
     {
         $job = IR_Store::job($id);
         if ($job && in_array($job['status'], ['queued', 'running'], true) && (time() - (int) ($job['heartbeat'] ?? $job['created'])) < 2 * self::STALE) {
@@ -29,6 +29,7 @@ final class IR_Jobs
             'status' => 'queued',
             'token' => wp_generate_password(32, false),
             'items' => $items,
+            'fresh' => $fresh,
             'done' => [],
             'current' => null,
             'errors' => [],
@@ -115,7 +116,7 @@ final class IR_Jobs
                 update_option($lock, time(), false);
 
                 try {
-                    $usage = $job['type'] === 'extract' ? self::do_extract($id, $item) : self::do_write($id, $item);
+                    $usage = $job['type'] === 'extract' ? self::do_extract($id, $item, !empty($job['fresh'])) : self::do_write($id, $item);
                     foreach ($usage as $k => $v) {
                         $job['usage'][$k] = ($job['usage'][$k] ?? 0) + $v;
                     }
@@ -151,14 +152,14 @@ final class IR_Jobs
         return self::public_job($job);
     }
 
-    private static function do_extract(int $id, string $file_id): array
+    private static function do_extract(int $id, string $file_id, bool $fresh = false): array
     {
         $state = IR_Store::load($id);
         $file = IR_Store::find_file($state, $file_id);
         if (!$file) {
             return [];
         }
-        $res = IR_Extractor::extract_file($id, $state, $file);
+        $res = IR_Extractor::extract_file($id, $state, $file, $fresh);
         IR_Store::mutate($id, function ($s) use ($file_id, $res) {
             // sostituisce i risultati precedenti dello stesso file
             $s['extraction']['candidates'] = array_values(array_filter($s['extraction']['candidates'], fn($c) => $c['file_id'] !== $file_id));
@@ -170,12 +171,14 @@ final class IR_Jobs
             $s['extraction']['docs'][$file_id] = $res['doc'];
             foreach ($s['files'] as &$f) {
                 if ($f['id'] === $file_id) {
-                    $f['extraction'] = ['status' => 'done', 'at' => time(), 'count' => count($res['candidates']), 'info' => count($res['info'])];
+                    $f['extraction'] = ['status' => 'done', 'at' => time(), 'count' => count($res['candidates']), 'info' => count($res['info']), 'model' => $res['doc']['model'], 'cached' => !empty($res['doc']['cached'])];
                 }
             }
             unset($f);
             $s['kpi'] = null; // i KPI vanno ricalcolati
-            IR_Store::log($s, 'Estrazione completata: ' . count($res['candidates']) . ' valori dal file ' . $file_id . '.');
+            $cached = !empty($res['doc']['cached']);
+            IR_Claude::log_spend($s, 'extract', $res['doc']['model'], $cached ? $res['doc']['saved'] : $res['doc']['usage'], $cached);
+            IR_Store::log($s, 'Estrazione completata: ' . count($res['candidates']) . ' valori dal file ' . $file_id . ($cached ? ' (risposta ripresa dalla memoria, nessun costo)' : '') . '.');
             return $s;
         });
         return $res['doc']['usage'];
@@ -203,6 +206,7 @@ final class IR_Jobs
         $res = IR_Writer::write_section($id, $state, $state['kpi'], $sid);
         IR_Store::mutate($id, function ($s) use ($sid, $res) {
             $s['report']['sections'][$sid] = $res;
+            IR_Claude::log_spend($s, 'write', $res['model'], $res['usage']);
             return $s;
         });
         return $res['usage'];

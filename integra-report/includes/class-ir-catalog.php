@@ -350,6 +350,15 @@ final class IR_Catalog
     }
 
     /** Documenti da cui estrarre: tutti quelli reali (non virtuali). */
+    /**
+     * Categorie "semplici": documenti da cui si ricavano quasi solo informazioni descrittive
+     * (al più un valore numerico previsto), come visura, statuto, organigramma, verbali, polizze.
+     */
+    public static function is_simple_slot(string $slot): bool
+    {
+        return count(self::extraction_slot_codes($slot)) <= 1;
+    }
+
     public static function extraction_slot_codes(string $slot): array
     {
         $out = [];

@@ -220,11 +220,23 @@
         <button class="button" data-a="back">← Tutti i report</button>
         <h1>${esc(r.profile.ragione_sociale || 'Nuovo report')}</h1>
         <span class="ir-muted">Modello: ${esc(B.model)}</span>
+        ${costBadge()}
       </div>
       ${stepper()}
       ${jobPanel()}
       <div class="ir-body">${body}</div>
       ${traceDrawer()}`;
+  }
+
+  const usd = (v) => '$' + Number(v).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const modelName = (id) => String(id).replace(/^claude-/, '').replace(/-(\d+)-(\d+)$/, ' $1.$2').replace(/^./, (c) => c.toUpperCase());
+
+  // Spesa API stimata del report: token registrati × prezzi di listino (comprende le rielaborazioni).
+  function costBadge() {
+    const c = S.rep.derived && S.rep.derived.cost;
+    if (!c || (!c.calls && !c.saved_calls)) return '';
+    const tip = `Stima a prezzi di listino sui token registrati (${c.calls} chiamate, ${Number(c.tokens).toLocaleString('it-IT')} token), comprese le rielaborazioni. Estrazione ${usd(c.extract)}, stesura ${usd(c.write)}.${c.saved_calls ? ` Riprese dalla memoria: ${c.saved_calls} (risparmio stimato ${usd(c.saved_usd)}).` : ''}${c.unknown.length ? ` Esclusi i modelli senza prezzo noto: ${c.unknown.join(', ')}.` : ''} Fa fede la console Anthropic.`;
+    return `<span class="ir-cost" title="${esc(tip)}">Spesa API stimata: <strong>${usd(c.usd)}</strong>${c.unknown.length ? ' + n.d.' : ''}${c.saved_calls ? ` · risparmiati ${usd(c.saved_usd)}` : ''}</span>`;
   }
 
   function jobPanel() {
@@ -412,7 +424,7 @@
     const fileRows = files.map((f) => {
       const st = f.extraction.status;
       const doc = ds && ds.docs[f.id];
-      const info = st === 'done' ? `${f.extraction.count} ${f.extraction.count === 1 ? 'valore' : 'valori'}, ${f.extraction.info} ${f.extraction.info === 1 ? 'informazione' : 'informazioni'}` : st === 'error' ? `<span class="ir-bad-t">${esc(f.extraction.error)}</span>` : 'da elaborare';
+      const info = st === 'done' ? `${f.extraction.count} ${f.extraction.count === 1 ? 'valore' : 'valori'}, ${f.extraction.info} ${f.extraction.info === 1 ? 'informazione' : 'informazioni'}${f.extraction.cached ? ' · <span class="ir-badge ir-good" title="Stesso file già elaborato: risposta ripresa dalla memoria, nessun costo. Usa Rielabora per forzare una nuova lettura.">dalla memoria, 0 token</span>' : f.extraction.model ? ` · <span class="ir-muted">${esc(modelName(f.extraction.model))}</span>` : ''}` : st === 'error' ? `<span class="ir-bad-t">${esc(f.extraction.error)}</span>` : 'da elaborare';
       const mismatch = doc && !doc.match ? `<div class="ir-alert ir-alert-warn">Il documento non sembra corrispondere alla categoria ${f.slot}: ${esc(doc.note)}</div>` : '';
       return `<tr><td><span class="ir-code">${f.slot}</span></td><td><a href="${fileUrl(f.id)}" target="_blank" rel="noopener">${esc(f.name)}</a>${doc ? `<div class="ir-muted">Riconosciuto come: ${esc(doc.tipo)} · scala: ${esc(doc.scala)}</div>` : ''}${mismatch}</td><td>${info}</td><td class="ir-right"><button class="button button-small" data-a="reextract" data-id="${f.id}" ${jobActive() ? 'disabled' : ''}>${st === 'done' ? 'Ri-estrai' : 'Estrai'}</button></td></tr>`;
     }).join('');

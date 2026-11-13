@@ -24,6 +24,8 @@ final class IR_Admin
         foreach (['extract', 'write'] as $purpose) {
             register_setting('ir_settings', 'ir_model_' . $purpose, ['type' => 'string', 'sanitize_callback' => fn($v) => isset(IR_Claude::MODELS[$v]) ? $v : '', 'default' => '']);
         }
+        register_setting('ir_settings', 'ir_model_extract_simple', ['type' => 'string', 'sanitize_callback' => fn($v) => isset(IR_Claude::MODELS[$v]) ? $v : 'inherit', 'default' => 'claude-sonnet-5-5']);
+        register_setting('ir_settings', 'ir_cache_days', ['type' => 'integer', 'sanitize_callback' => fn($v) => max(0, min(365, (int) $v)), 'default' => 30]);
         register_setting('ir_settings', 'ir_effort_extract', ['type' => 'string', 'sanitize_callback' => fn($v) => isset(IR_Claude::EFFORTS[$v]) ? $v : 'high', 'default' => 'high']);
         register_setting('ir_settings', 'ir_effort_write', ['type' => 'string', 'sanitize_callback' => fn($v) => isset(IR_Claude::EFFORTS[$v]) ? $v : 'high', 'default' => 'high']);
         register_setting('ir_settings', 'ir_studio', $text);
@@ -87,10 +89,14 @@ final class IR_Admin
     /** Etichetta dei modelli in uso, per l'intestazione dell'applicazione. */
     public static function model_summary(): string
     {
-        $short = static fn(string $id) => trim((string) preg_replace('/\s*\(.*$/', '', IR_Claude::MODELS[$id] ?? $id));
+        $short = static fn(string $id) => trim((string) preg_replace('/^Claude\\s+|\\s*\\(.*$/', '', IR_Claude::MODELS[$id] ?? $id));
         $e = IR_Claude::model('extract');
         $w = IR_Claude::model('write');
-        return $e === $w ? $short($e) : 'estrazione ' . $short($e) . ' · stesura ' . $short($w);
+        $x = IR_Claude::model_for_slot('A2');
+        if ($e === $w && $x === $e) {
+            return 'Claude ' . $short($e);
+        }
+        return 'estrazione ' . $short($e) . ($x !== $e ? ' (documenti semplici: ' . $short($x) . ')' : '') . ' · stesura ' . $short($w);
     }
 
     public static function render_app(): void
@@ -138,6 +144,20 @@ final class IR_Admin
                             </select></label> &nbsp;
                         <?php endforeach; ?>
                         <p class="description">Le due fasi possono usare modelli diversi per contenere i costi. L'estrazione legge ogni documento per intero ed è la fase in cui un errore di lettura pesa di più: se scegli un modello più economico, controlla con più attenzione i dati a bassa affidabilità e i controlli di quadratura del passo 4. Ogni dato e ogni capitolo riportano il modello che li ha prodotti.</p>
+                    </td></tr>
+                    <tr><th scope="row"><label for="ir_model_extract_simple">Documenti semplici</label></th><td>
+                        <?php $simple = (string) get_option('ir_model_extract_simple', 'claude-sonnet-5-5'); ?>
+                        <select id="ir_model_extract_simple" name="ir_model_extract_simple">
+                            <option value="inherit" <?php selected(isset(IR_Claude::MODELS[$simple]), false); ?>>Come l'estrazione dati</option>
+                            <?php foreach (IR_Claude::MODELS as $id => $label) : ?>
+                                <option value="<?php echo esc_attr($id); ?>" <?php selected($simple, $id); ?>><?php echo esc_html($label); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <p class="description">Modello per i documenti da cui si ricavano quasi solo dati anagrafici e descrittivi: <?php echo esc_html(implode(', ', array_keys(array_filter(IR_Catalog::documents(), fn($d, $k) => empty($d['virtual']) && IR_Catalog::is_simple_slot($k), ARRAY_FILTER_USE_BOTH)))); ?>. Bilanci, Centrale Rischi, scadenziari e gli altri documenti numerici usano sempre il modello di estrazione.</p>
+                    </td></tr>
+                    <tr><th scope="row"><label for="ir_cache_days">Memoria delle estrazioni (giorni)</label></th><td>
+                        <input type="number" min="0" max="365" id="ir_cache_days" name="ir_cache_days" value="<?php echo esc_attr((string) IR_Claude::cache_days()); ?>">
+                        <p class="description">Se lo stesso file viene elaborato di nuovo con le stesse istruzioni (anche in un altro report), la risposta già ottenuta viene riusata senza alcun costo. "Rielabora" su un singolo file forza sempre una nuova lettura. La memoria conserva i dati estratti, nella cartella protetta dei documenti, per il numero di giorni indicato; 0 la disattiva.</p>
                     </td></tr>
                     <tr><th scope="row">Accuratezza (effort)</th><td>
                         <label>Estrazione dati <select name="ir_effort_extract"><?php foreach (IR_Claude::EFFORTS as $k => $l) : ?><option value="<?php echo esc_attr($k); ?>" <?php selected(IR_Claude::effort('extract'), $k); ?>><?php echo esc_html($l); ?></option><?php endforeach; ?></select></label>

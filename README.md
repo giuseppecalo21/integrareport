@@ -60,6 +60,10 @@ Durante le chiamate lunghe il lavoro aggiorna un segnale di vita. Se il processo
 
 In *Impostazioni* si sceglie un modello generale e, facoltativamente, un modello distinto per l'estrazione dei dati e per la stesura. Senza scelta esplicita le due fasi usano il modello generale.
 
+- **Documenti semplici.** Le categorie da cui si ricavano quasi solo dati anagrafici e descrittivi (visura, statuto, organigramma, verbali, polizze…) vengono lette con un modello più economico, per impostazione predefinita Claude Sonnet 5.5. Bilanci, Centrale Rischi, scadenziari e gli altri documenti numerici usano sempre il modello di estrazione.
+- **Memoria delle estrazioni.** Se lo stesso file viene elaborato di nuovo con le stesse istruzioni e lo stesso modello, anche in un altro report, la risposta già ottenuta viene riusata senza costo. *Rielabora* su un singolo file forza una nuova lettura. Le risposte restano nella cartella protetta dei documenti per 30 giorni (valore modificabile; 0 disattiva la memoria).
+- **Spesa stimata.** L'intestazione di ogni report mostra la spesa API stimata: token registrati per prezzi di listino, comprese le rielaborazioni, con il dettaglio per fase e il risparmio dovuto alla memoria. È una stima: fa fede la console Anthropic.
+
 ## Parametri normativi
 
 Soglie, benchmark di settore, aliquote ZES, soglie CCII e tabella del rating sono raccolti in `includes/class-ir-params.php` (valori della skill, normativa aggiornata a **maggio 2026**). Si aggiornano senza toccare il codice da **Impostazioni › Parametri normativi** inserendo solo le chiavi da modificare in JSON. Ogni report riporta la versione dei parametri usata.

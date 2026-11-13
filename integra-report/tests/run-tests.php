@@ -174,6 +174,40 @@ preg_match_all('/w:name="([^"]+)"/', $xml, $b);
 check('tutte le parti XML del .docx sono ben formate', $wellFormed);
 check('ogni collegamento interno ha la sua voce di tracciabilità', !array_diff(array_unique($a[1]), $b[1]) && count($a[1]) > 50);
 
+echo "Costi: modello per documento, memoria delle estrazioni, stima di spesa\n";
+check('documenti semplici (visura, statuto, organigramma) → modello economico', IR_Catalog::is_simple_slot('A1') && IR_Catalog::is_simple_slot('A2') && IR_Catalog::is_simple_slot('A4') && IR_Claude::model_for_slot('A2') === 'claude-sonnet-5-5');
+check('documenti numerici (bilancio, Centrale Rischi, scadenziari) → modello di estrazione', !IR_Catalog::is_simple_slot('B1') && !IR_Catalog::is_simple_slot('C1') && !IR_Catalog::is_simple_slot('D5') && IR_Claude::model_for_slot('B1') === 'claude-opus-5-5');
+$GLOBALS['opts']['ir_model_extract_simple'] = 'inherit';
+check('"come l\'estrazione" disattiva la distinzione', IR_Claude::model_for_slot('A2') === IR_Claude::model('extract'));
+unset($GLOBALS['opts']['ir_model_extract_simple']);
+
+$content = [['type' => 'document', 'source' => ['data' => base64_encode('PDF-A')]], ['type' => 'text', 'text' => 'istruzioni']];
+$k1 = IR_Claude::cache_key('claude-opus-5-5', 'high', 'sys', $content, ['a' => 1]);
+$content2 = $content;
+$content2[0]['source']['data'] = base64_encode('PDF-B');
+check('impronta: cambia con il file, con il modello e con le istruzioni', $k1 !== IR_Claude::cache_key('claude-opus-5-5', 'high', 'sys', $content2, ['a' => 1]) && $k1 !== IR_Claude::cache_key('claude-sonnet-5-5', 'high', 'sys', $content, ['a' => 1]) && $k1 !== IR_Claude::cache_key('claude-opus-5-5', 'high', 'sys2', $content, ['a' => 1]) && $k1 === IR_Claude::cache_key('claude-opus-5-5', 'high', 'sys', $content, ['a' => 1]));
+$kt = 'test' . bin2hex(random_bytes(8));
+check('memoria: risposta assente prima del salvataggio', IR_Claude::cache_get($kt) === null);
+IR_Claude::cache_put($kt, ['text' => '{}', 'blocks' => [], 'usage' => ['input' => 10, 'output' => 5, 'cache_read' => 0, 'cache_write' => 0], 'model' => 'claude-opus-5-5', 'stop_reason' => 'end_turn']);
+check('memoria: risposta riletta identica', (IR_Claude::cache_get($kt)['usage']['input'] ?? null) === 10);
+$GLOBALS['opts']['ir_cache_days'] = 0;
+check('memoria disattivabile dalle impostazioni', IR_Claude::cache_get($kt) === null);
+unset($GLOBALS['opts']['ir_cache_days']);
+@unlink(IR_Store::base_dir() . '/cache/' . $kt . '.json');
+
+check('costo: 1M ingresso + 1M uscita su Opus = 24 $', near(IR_Claude::cost(['input' => 1000000, 'output' => 1000000], 'claude-opus-5-5'), 24.0));
+check('costo: lettura e scrittura in cache su Sonnet', near(IR_Claude::cost(['cache_read' => 1000000, 'cache_write' => 1000000], 'claude-sonnet-5-5'), 0.10 + 2.5));
+check('costo: modello senza prezzo noto → non stimato', IR_Claude::cost(['input' => 1], 'modello-ignoto') === null);
+$sp = base_state();
+IR_Claude::log_spend($sp, 'extract', 'claude-opus-5-5', ['input' => 500000, 'output' => 50000]);
+IR_Claude::log_spend($sp, 'extract', 'claude-opus-5-5', ['input' => 500000, 'output' => 50000]);
+IR_Claude::log_spend($sp, 'write', 'claude-sonnet-5-5', ['input' => 100000, 'output' => 100000]);
+IR_Claude::log_spend($sp, 'extract', 'claude-opus-5-5', ['input' => 250000, 'output' => 0], true);
+IR_Claude::log_spend($sp, 'write', 'modello-ignoto', ['input' => 1, 'output' => 1]);
+$rc = IR_Claude::report_cost($sp);
+check('registro di spesa: somma cumulativa per fase, rielaborazioni comprese', near($rc['extract'], 6.0) && near($rc['write'], 1.2) && near($rc['usd'], 7.2) && $rc['calls'] === 4);
+check('registro di spesa: risparmio della memoria e modelli senza prezzo tenuti distinti', near($rc['saved_usd'], 1.0) && $rc['saved_calls'] === 1 && $rc['unknown'] === ['modello-ignoto']);
+
 echo "Documento: checklist, appendici, capitoli non generati\n";
 $model = IR_Document::build($state);
 $ap = $model['appendices'];

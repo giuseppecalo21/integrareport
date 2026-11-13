@@ -108,7 +108,7 @@ CAMPI DELLE INFORMAZIONI QUALITATIVE
     /**
      * Estrae un file. Restituisce ['doc' => ..., 'candidates' => [...], 'info' => [...], 'warnings' => [...], 'usage' => ...]
      */
-    public static function extract_file(int $report_id, array $state, array $file): array
+    public static function extract_file(int $report_id, array $state, array $file, bool $fresh = false): array
     {
         $docs = IR_Catalog::documents();
         $slot = $file['slot'];
@@ -134,7 +134,8 @@ CAMPI DELLE INFORMAZIONI QUALITATIVE
             ['type' => 'text', 'text' => $intro],
         ];
 
-        $res = IR_Claude::call(self::system_prompt(), $content, self::schema(), 'extract');
+        // $fresh = rilettura chiesta espressamente dal consulente: non si usa la risposta in memoria
+        $res = IR_Claude::call(self::system_prompt(), $content, self::schema(), 'extract', IR_Claude::model_for_slot($slot), !$fresh);
         $data = json_decode($res['text'], true);
         if (!is_array($data)) {
             throw new RuntimeException('Output di estrazione non valido (JSON non interpretabile).');
@@ -218,6 +219,8 @@ CAMPI DELLE INFORMAZIONI QUALITATIVE
                 'note' => (string) ($data['documento']['note'] ?? ''),
                 'model' => $res['model'],
                 'usage' => $res['usage'],
+                'cached' => $res['cached'],
+                'saved' => $res['saved'],
                 'at' => time(),
             ],
             'candidates' => $candidates,

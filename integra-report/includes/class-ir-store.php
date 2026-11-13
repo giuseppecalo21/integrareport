@@ -78,6 +78,7 @@ final class IR_Store
             'files' => [],
             'interview' => ['text' => '', 'date' => ''],
             'sections_selected' => [],
+            'spent' => [], // registro cumulativo dei token consumati (per la stima di spesa)
             'extraction' => ['candidates' => [], 'info' => [], 'warnings' => [], 'docs' => []],
             'overrides' => [],
             'params' => ['zscore_model' => 'auto', 'soci_onerosi' => false, 'riparto_zes' => null],

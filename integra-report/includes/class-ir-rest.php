@@ -100,6 +100,7 @@ final class IR_Rest
             'enabled' => IR_Catalog::enabled_sections($avail),
             'dataset' => IR_Dataset::summary($resolved),
             'periods' => IR_Dataset::annual_periods($resolved),
+            'cost' => IR_Claude::report_cost($state),
         ];
         $out['job'] = IR_Jobs::public_job(IR_Store::job($id));
         return $out;
@@ -262,7 +263,8 @@ final class IR_Rest
         if (!$items) {
             throw new RuntimeException('Nessun documento da elaborare.');
         }
-        return ['job' => IR_Jobs::start($id, 'extract', $items)];
+        // la rilettura di file scelti espressamente non usa la memoria delle risposte
+        return ['job' => IR_Jobs::start($id, 'extract', $items, is_array($only) && $only)];
     }
 
     public static function write(WP_REST_Request $req): array

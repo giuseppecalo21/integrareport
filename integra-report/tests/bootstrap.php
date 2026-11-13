@@ -13,5 +13,6 @@ function wp_upload_dir() { return ['basedir' => sys_get_temp_dir() . '/ir-test-u
 function wp_mkdir_p($d) { return @mkdir($d, 0777, true); }
 function trailingslashit($s){return rtrim($s,'/').'/';}
 function get_userdata($i){return null;}
+function apply_filters($t, $v) { return $v; }
 function wp_check_filetype($n) { return ['type' => 'application/pdf']; }
-foreach (['catalog','params','format','store','text-converter','extractor','dataset','calculator','tables','writer','document','docx'] as $c) require IR_DIR . "includes/class-ir-$c.php";
+foreach (['catalog','params','format','store','text-converter','claude','extractor','dataset','calculator','tables','writer','document','docx'] as $c) require IR_DIR . "includes/class-ir-$c.php";
