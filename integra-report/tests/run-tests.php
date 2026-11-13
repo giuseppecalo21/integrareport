@@ -97,12 +97,12 @@ check('correzione manuale applicata e tracciata', $r['SP_D7@2024']['value'] == 2
 $s = base_state();
 foreach ($s['extraction']['candidates'] as &$c) {
     if ($c['code'] === 'SP_CIV' && $c['period'] === '2024') {
-        $c['value'] += 1000000;
+        $c['value'] += 300000; // PFN di fine esercizio negativa, PFN media ancora positiva
     }
 }
 unset($c);
 $c5 = (new IR_Calculator($s, IR_Dataset::resolve($s)))->run();
-check('cassa netta (PFN negativa): effetto leva non applicabile, con motivo', $c5['nodes']['PFN@2024']['value'] < 0 && $c5['nodes']['LEVA@2024']['value'] === null && str_contains((string) $c5['nodes']['LEVA@2024']['nv_reason'], 'cassa netta'));
+check('cassa netta (PFN negativa): effetto leva non applicabile, con motivo', $c5['nodes']['PFN@2024']['value'] < 0 && $c5['nodes']['ROD@2024']['value'] !== null && $c5['nodes']['LEVA@2024']['value'] === null && str_contains((string) $c5['nodes']['LEVA@2024']['nv_reason'], 'cassa netta'));
 check('con PFN positiva l\'effetto leva resta calcolato', $N('PFN@2024') > 0 && $N('LEVA@2024') !== null);
 
 $en = IR_Catalog::enabled_sections(['A1', 'B1']);
