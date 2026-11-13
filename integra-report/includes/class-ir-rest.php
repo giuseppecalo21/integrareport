@@ -279,6 +279,9 @@ final class IR_Rest
         }
         $only = $req->get_param('sections');
         $order = array_values(array_filter(array_keys(IR_Catalog::sections()), fn($s) => in_array($s, $state['sections_selected'], true)));
+        // i capitoli che allegano la visura vanno scritti di seguito: la cache dell'API dura pochi minuti
+        $first = array_values(array_filter($order, static fn($s) => in_array('A1', IR_Catalog::sections()[$s]['attach'] ?? [], true)));
+        $order = array_merge($first, array_values(array_diff($order, $first)));
         $items = array_merge($order, ['S0']); // il sommario per ultimo
         if (is_array($only) && $only) {
             $items = array_values(array_intersect($items, $only));

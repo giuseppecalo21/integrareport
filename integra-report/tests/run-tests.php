@@ -181,6 +181,12 @@ $GLOBALS['opts']['ir_model_extract_simple'] = 'inherit';
 check('"come l\'estrazione" disattiva la distinzione', IR_Claude::model_for_slot('A2') === IR_Claude::model('extract'));
 unset($GLOBALS['opts']['ir_model_extract_simple']);
 
+check('capitoli analitici (riclassificazioni, indici, DSCR) → modello economico', IR_Claude::model_for_section('S3') === 'claude-sonnet-5-5' && IR_Claude::model_for_section('S5') === 'claude-sonnet-5-5' && IR_Claude::model_for_section('S13') === 'claude-sonnet-5-5');
+check('sommario, capitoli qualitativi, rating e raccomandazioni → modello di stesura', array_unique(array_map([IR_Claude::class, 'model_for_section'], ['S0', 'S1', 'S2', 'S18', 'S20', 'S21', 'S22'])) === ['claude-opus-5-5']);
+$GLOBALS['opts']['ir_model_write_analytic'] = 'inherit';
+check('"come la stesura" disattiva la distinzione', IR_Claude::model_for_section('S3') === IR_Claude::model('write'));
+unset($GLOBALS['opts']['ir_model_write_analytic']);
+
 $content = [['type' => 'document', 'source' => ['data' => base64_encode('PDF-A')]], ['type' => 'text', 'text' => 'istruzioni']];
 $k1 = IR_Claude::cache_key('claude-opus-5-5', 'high', 'sys', $content, ['a' => 1]);
 $content2 = $content;

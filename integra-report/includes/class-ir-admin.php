@@ -25,6 +25,7 @@ final class IR_Admin
             register_setting('ir_settings', 'ir_model_' . $purpose, ['type' => 'string', 'sanitize_callback' => fn($v) => isset(IR_Claude::MODELS[$v]) ? $v : '', 'default' => '']);
         }
         register_setting('ir_settings', 'ir_model_extract_simple', ['type' => 'string', 'sanitize_callback' => fn($v) => isset(IR_Claude::MODELS[$v]) ? $v : 'inherit', 'default' => 'claude-sonnet-5-5']);
+        register_setting('ir_settings', 'ir_model_write_analytic', ['type' => 'string', 'sanitize_callback' => fn($v) => isset(IR_Claude::MODELS[$v]) ? $v : 'inherit', 'default' => 'claude-sonnet-5-5']);
         register_setting('ir_settings', 'ir_cache_days', ['type' => 'integer', 'sanitize_callback' => fn($v) => max(0, min(365, (int) $v)), 'default' => 30]);
         register_setting('ir_settings', 'ir_effort_extract', ['type' => 'string', 'sanitize_callback' => fn($v) => isset(IR_Claude::EFFORTS[$v]) ? $v : 'high', 'default' => 'high']);
         register_setting('ir_settings', 'ir_effort_write', ['type' => 'string', 'sanitize_callback' => fn($v) => isset(IR_Claude::EFFORTS[$v]) ? $v : 'high', 'default' => 'high']);
@@ -93,10 +94,11 @@ final class IR_Admin
         $e = IR_Claude::model('extract');
         $w = IR_Claude::model('write');
         $x = IR_Claude::model_for_slot('A2');
-        if ($e === $w && $x === $e) {
+        $a = IR_Claude::model_for_section('S3');
+        if ($e === $w && $x === $e && $a === $w) {
             return 'Claude ' . $short($e);
         }
-        return 'estrazione ' . $short($e) . ($x !== $e ? ' (documenti semplici: ' . $short($x) . ')' : '') . ' · stesura ' . $short($w);
+        return 'estrazione ' . $short($e) . ($x !== $e ? ' (documenti semplici: ' . $short($x) . ')' : '') . ' · stesura ' . $short($w) . ($a !== $w ? ' (capitoli analitici: ' . $short($a) . ')' : '');
     }
 
     public static function render_app(): void
@@ -154,6 +156,16 @@ final class IR_Admin
                             <?php endforeach; ?>
                         </select>
                         <p class="description">Modello per i documenti da cui si ricavano quasi solo dati anagrafici e descrittivi: <?php echo esc_html(implode(', ', array_keys(array_filter(IR_Catalog::documents(), fn($d, $k) => empty($d['virtual']) && IR_Catalog::is_simple_slot($k), ARRAY_FILTER_USE_BOTH)))); ?>. Bilanci, Centrale Rischi, scadenziari e gli altri documenti numerici usano sempre il modello di estrazione.</p>
+                    </td></tr>
+                    <tr><th scope="row"><label for="ir_model_write_analytic">Capitoli analitici</label></th><td>
+                        <?php $an = (string) get_option('ir_model_write_analytic', 'claude-sonnet-5-5'); ?>
+                        <select id="ir_model_write_analytic" name="ir_model_write_analytic">
+                            <option value="inherit" <?php selected(isset(IR_Claude::MODELS[$an]), false); ?>>Come la stesura</option>
+                            <?php foreach (IR_Claude::MODELS as $id => $label) : ?>
+                                <option value="<?php echo esc_attr($id); ?>" <?php selected($an, $id); ?>><?php echo esc_html($label); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <p class="description">Modello per i capitoli che commentano tabelle già calcolate (riclassificazioni, indici, rendiconto, Z-Score, PFN, DSCR…): il testo non può contenere numeri propri, solo riferimenti verificati dal plugin. Sommario esecutivo, capitoli qualitativi, rating (§21) e raccomandazioni (§22) usano sempre il modello di stesura.</p>
                     </td></tr>
                     <tr><th scope="row"><label for="ir_cache_days">Memoria delle estrazioni (giorni)</label></th><td>
                         <input type="number" min="0" max="365" id="ir_cache_days" name="ir_cache_days" value="<?php echo esc_attr((string) IR_Claude::cache_days()); ?>">

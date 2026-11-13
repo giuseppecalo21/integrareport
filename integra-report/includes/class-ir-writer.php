@@ -162,6 +162,11 @@ FORMATO DI USCITA
         $docmap = [];
         $budget = 20 * 1024 * 1024; // byte di file originali: la codifica base64 aggiunge circa un terzo, limite API 32 MB
         $skipped = [];
+        // Ordine canonico degli allegati (quello del catalogo, intervista in coda): capitoli diversi
+        // che allegano gli stessi documenti iniziali producono richieste con lo stesso prefisso,
+        // che l'API rilegge dalla cache a una frazione del prezzo.
+        $canon = array_keys(IR_Catalog::documents());
+        usort($attachSlots, static fn($a, $b) => array_search($a, $canon, true) <=> array_search($b, $canon, true));
         foreach ($attachSlots as $slot) {
             if ($slot === 'INT') {
                 if (trim((string) $state['interview']['text']) !== '') {
@@ -191,6 +196,8 @@ FORMATO DI USCITA
             $docmap[] = ['kind' => 'norm'];
         }
         if ($content) {
+            // due punti di cache: dopo il primo documento (prefisso condiviso tra capitoli) e dopo l'ultimo
+            $content[0]['cacheControl'] = ['type' => 'ephemeral'];
             $content[count($content) - 1]['cacheControl'] = ['type' => 'ephemeral'];
         }
 
@@ -205,7 +212,7 @@ FORMATO DI USCITA
             . 'Redigi ora la sezione.';
         $content[] = ['type' => 'text', 'text' => $prompt];
 
-        $res = IR_Claude::call(self::system_prompt(), $content, null, 'write');
+        $res = IR_Claude::call(self::system_prompt(), $content, null, 'write', IR_Claude::model_for_section($sid));
 
         // ricompone il testo inserendo i marcatori di citazione
         $text = '';

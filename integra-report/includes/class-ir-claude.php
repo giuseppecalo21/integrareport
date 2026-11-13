@@ -76,6 +76,25 @@ final class IR_Claude
         return isset(self::MODELS[$m]) ? $m : self::model('extract');
     }
 
+    /** Capitoli analitici che restano comunque sul modello di stesura: sono giudizio, non commento a tabelle. */
+    private const WRITE_FULL = ['S21', 'S22'];
+
+    /**
+     * Modello per la stesura di un capitolo. Nei capitoli analitici il modello commenta tabelle
+     * già calcolate e non può scrivere numeri (solo segnaposto verificati dal plugin): lì basta
+     * un modello più economico. Sommario, capitoli qualitativi, rating e raccomandazioni usano
+     * il modello di stesura.
+     */
+    public static function model_for_section(string $sid): string
+    {
+        $kind = IR_Catalog::sections()[$sid]['kind'] ?? '';
+        if ($sid === 'S0' || $kind !== 'analitica' || in_array($sid, self::WRITE_FULL, true)) {
+            return self::model('write');
+        }
+        $m = (string) get_option('ir_model_write_analytic', 'claude-sonnet-5-5');
+        return isset(self::MODELS[$m]) ? $m : self::model('write');
+    }
+
     /** Costo stimato in dollari di un consumo di token; null se il prezzo del modello non è noto. */
     public static function cost(array $usage, string $model): ?float
     {
