@@ -80,7 +80,7 @@ final class IR_Store
             'sections_selected' => [],
             'extraction' => ['candidates' => [], 'info' => [], 'warnings' => [], 'docs' => []],
             'overrides' => [],
-            'params' => ['zscore_model' => 'auto', 'soci_onerosi' => false, 'riparto_zes' => null],
+            'params' => ['zscore_model' => 'auto', 'soci_onerosi' => false, 'infragruppo_commerciali' => false, 'riparto_zes' => null],
             'kpi' => null,
             'report' => null,
             'log' => [],

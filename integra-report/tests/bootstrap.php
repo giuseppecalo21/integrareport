@@ -14,4 +14,19 @@ function wp_mkdir_p($d) { return @mkdir($d, 0777, true); }
 function trailingslashit($s){return rtrim($s,'/').'/';}
 function get_userdata($i){return null;}
 function wp_check_filetype($n) { return ['type' => 'application/pdf']; }
-foreach (['catalog','params','format','store','text-converter','extractor','dataset','calculator','tables','writer','document','docx'] as $c) require IR_DIR . "includes/class-ir-$c.php";
+// Sostituto del client API: registra la richiesta e restituisce una risposta predefinita.
+final class IR_Claude
+{
+    public static array $calls = [];
+    public static string $reply = '';
+    public static function call(string $system, array $content, ?array $schema, string $purpose): array
+    {
+        self::$calls[] = ['system' => $system, 'content' => $content, 'schema' => $schema];
+        return ['text' => self::$reply, 'blocks' => [['text' => self::$reply, 'citations' => []]], 'usage' => ['input' => 1, 'output' => 1, 'cache_read' => 0, 'cache_write' => 0], 'model' => 'test', 'stop_reason' => 'end_turn'];
+    }
+    public static function file_block(int $report_id, array $file, bool $citations, ?string $title = null): array
+    {
+        return ['type' => 'document', 'source' => ['type' => 'text', 'mediaType' => 'text/plain', 'data' => 'x'], 'title' => $title ?? $file['name'], 'citations' => ['enabled' => $citations]];
+    }
+}
+foreach (['catalog','params','format','store','text-converter','extractor','dataset','calculator','context','tables','writer','document','docx'] as $c) require IR_DIR . "includes/class-ir-$c.php";

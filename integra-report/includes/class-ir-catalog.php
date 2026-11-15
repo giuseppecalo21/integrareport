@@ -38,6 +38,7 @@ final class IR_Catalog
             'B4' => ['area' => 'B', 'name' => 'Libro giornale / Mastrini contabili', 'level' => 'opt', 'hint' => 'Software gestionale'],
             'B5' => ['area' => 'B', 'name' => 'Dichiarazioni fiscali ultimi 2 anni (Redditi SC, IRAP)', 'level' => 'sugg', 'hint' => 'Cassetto fiscale AdE'],
             'B6' => ['area' => 'B', 'name' => 'Rendiconto Finanziario OIC 10 (se non già in B1)', 'level' => 'opt', 'hint' => "Predisposto dall'azienda"],
+            'B7' => ['area' => 'B', 'name' => 'Relazione sulla gestione e relazioni degli organi di controllo', 'level' => 'sugg', 'hint' => 'Fascicolo di bilancio — usata solo per le informazioni qualitative, mai per i numeri'],
             'C1' => ['area' => 'C', 'name' => "Centrale Rischi Banca d'Italia (ultimi 6/12 mesi)", 'level' => 'sugg', 'hint' => "Banca d'Italia (gratuito)"],
             'C2' => ['area' => 'C', 'name' => 'Estratti conto bancari (ultimi 12 mesi)', 'level' => 'sugg', 'hint' => 'Home banking / Banche'],
             'C3' => ['area' => 'C', 'name' => 'Piani di ammortamento finanziamenti in essere', 'level' => 'sugg', 'hint' => 'Contratti bancari'],
@@ -78,9 +79,9 @@ final class IR_Catalog
     public static function sections(): array
     {
         return [
-            'S1' => ['n' => 1, 'title' => 'Profilo Aziendale e Governance', 'required' => [['A1']], 'optional' => ['A2', 'A3', 'A4', 'A5', 'A6', 'E3', 'E4'], 'kind' => 'qualitativa', 'attach' => ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'E3', 'E4'],
+            'S1' => ['n' => 1, 'title' => 'Profilo Aziendale e Governance', 'required' => [['A1']], 'optional' => ['A2', 'A3', 'A4', 'A5', 'A6', 'E3', 'E4'], 'kind' => 'qualitativa', 'attach' => ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'E3', 'E4', 'B7'],
                 'outline' => ['1.1 Anagrafica societaria', '1.2 Compagine sociale', '1.3 Organi di amministrazione', '1.4 Struttura organizzativa', '1.5 Sintesi della governance'], 'tables' => ['anagrafica']],
-            'S2' => ['n' => 2, 'title' => 'Posizionamento di Mercato e Modello di Business', 'required' => [['A1'], ['INT']], 'optional' => ['G1', 'G2'], 'kind' => 'qualitativa', 'attach' => ['A1', 'INT', 'G1', 'G2', 'F4'],
+            'S2' => ['n' => 2, 'title' => 'Posizionamento di Mercato e Modello di Business', 'required' => [['A1'], ['INT']], 'optional' => ['G1', 'G2'], 'kind' => 'qualitativa', 'attach' => ['A1', 'INT', 'G1', 'G2', 'F4', 'B7'],
                 'outline' => ['2.1 Settore di attività', '2.2 Modello di business', '2.3 Clienti e fornitori chiave e dipendenze', '2.4 Sintesi e implicazioni'], 'tables' => ['concentrazione']],
             'S3' => ['n' => 3, 'title' => 'Riclassificazione di Bilancio (SP Finanziario + Funzionale)', 'required' => [['B1']], 'optional' => ['B2', 'B3'], 'kind' => 'analitica',
                 'outline' => ['3.1 Stato Patrimoniale riclassificato — Schema finanziario', '3.2 Stato Patrimoniale riclassificato — Schema funzionale', '3.3 Commento sulle variazioni significative', '3.4 Quadratura e note metodologiche'], 'tables' => ['sp_finanziario', 'sp_funzionale', 'controlli']],
@@ -137,6 +138,26 @@ final class IR_Catalog
         ];
     }
 
+    /** Voci di C.II e di D che nello schema ordinario espongono la riga "esigibili oltre l'esercizio successivo". */
+    public const CREDITI_VOCI = [
+        '1' => '1) Crediti verso clienti', '2' => '2) Crediti verso imprese controllate', '3' => '3) Crediti verso imprese collegate',
+        '4' => '4) Crediti verso controllanti', '5' => '5) Crediti verso imprese sottoposte al controllo delle controllanti',
+        '5BIS' => '5-bis) Crediti tributari', '5TER' => '5-ter) Imposte anticipate', '5QUATER' => '5-quater) Crediti verso altri',
+    ];
+    public const DEBITI_VOCI = [
+        '1' => '1) Obbligazioni', '2' => '2) Obbligazioni convertibili', '3' => '3) Debiti verso soci per finanziamenti', '4' => '4) Debiti verso banche',
+        '5' => '5) Debiti verso altri finanziatori', '6' => '6) Acconti', '7' => '7) Debiti verso fornitori', '8' => '8) Debiti rappresentati da titoli di credito',
+        '9' => '9) Debiti verso imprese controllate', '10' => '10) Debiti verso imprese collegate', '11' => '11) Debiti verso controllanti',
+        '11BIS' => '11-bis) Debiti verso imprese sottoposte al controllo delle controllanti', '12' => '12) Debiti tributari',
+        '13' => '13) Debiti verso istituti di previdenza e sicurezza sociale', '14' => '14) Altri debiti',
+    ];
+    /** Voci di debito verso imprese del gruppo (possibile natura commerciale). */
+    public const DEBITI_GRUPPO = ['SP_D9' => 'D.9', 'SP_D10' => 'D.10', 'SP_D11' => 'D.11', 'SP_D11BIS' => 'D.11-bis'];
+    /** Informazioni qualitative che sono identificativi puntuali: si possono inserire tali e quali nel testo. */
+    public const INFO_ATOMICHE = ['ragione_sociale', 'codice_fiscale', 'partita_iva', 'rea', 'pec', 'data_costituzione'];
+    /** Informazioni di cui conta solo il dato più recente. */
+    public const INFO_UNIVOCHE = ['ragione_sociale', 'forma_giuridica', 'codice_fiscale', 'partita_iva', 'rea', 'pec', 'sede_legale', 'data_costituzione', 'stato_attivita', 'ateco', 'capitale_sociale', 'addetti', 'organo_controllo', 'durc', 'tipo_bilancio'];
+
     public const FORME = ['S.r.l.', 'S.r.l.s.', 'S.p.A.', 'S.a.p.a.', 'S.n.c.', 'S.a.s.', 'Ditta individuale', 'Società cooperativa', 'Consorzio', 'Altro'];
     public const DIMENSIONI = ['micro' => 'Micro impresa', 'piccola' => 'Piccola impresa', 'media' => 'Media impresa', 'grande' => 'Grande impresa'];
     public const PROVINCE = ['Agrigento', 'Caltanissetta', 'Catania', 'Enna', 'Messina', 'Palermo', 'Ragusa', 'Siracusa', 'Trapani', 'Fuori Sicilia'];
@@ -162,8 +183,12 @@ final class IR_Catalog
         $add('SP_CI', 'C.I) Rimanenze (totale)', $g, $bil);
         $add('SP_CII_CLIENTI', 'C.II.1) Crediti verso clienti esigibili entro l\'esercizio successivo', $g, $bil, 'eur', 'Spesso solo in Nota Integrativa nei bilanci abbreviati.');
         $add('SP_CII_TOT', 'C.II) Crediti — totale', $g, $bil);
-        $add('SP_CII_ENTRO', 'C.II) Crediti — di cui esigibili entro l\'esercizio successivo', $g, $bil);
-        $add('SP_CII_OLTRE', 'C.II) Crediti — di cui esigibili oltre l\'esercizio successivo', $g, $bil);
+        $add('SP_CII_ENTRO', 'C.II) Crediti — di cui esigibili entro l\'esercizio successivo', $g, $bil, 'eur', 'Solo se è una riga del prospetto riferita al totale dei crediti (schema abbreviato). Nello schema ordinario non esiste: non ricavarla dalla Nota Integrativa.');
+        $add('SP_CII_OLTRE', 'C.II) Crediti — di cui esigibili oltre l\'esercizio successivo', $g, $bil, 'eur', 'Solo se è una riga del prospetto riferita al totale dei crediti (schema abbreviato). Nello schema ordinario usa i codici SP_CII_OLTRE_* delle singole voci.');
+        foreach (self::CREDITI_VOCI as $sfx => $lbl) {
+            $add('SP_CII_OLTRE_' . $sfx, "C.II.$lbl — esigibili oltre l'esercizio successivo", $g, $bil, 'eur', 'Riga "esigibili oltre l\'esercizio successivo" della singola voce nel prospetto di Stato Patrimoniale (schema ordinario), per ogni colonna.');
+        }
+        $add('SP_CII_5TER', 'C.II.5-ter) Imposte anticipate (totale)', $g, $bil);
         $add('SP_CIII', 'C.III) Attività finanziarie che non costituiscono immobilizzazioni', $g, $bil);
         $add('SP_CIV', 'C.IV) Disponibilità liquide (totale)', $g, $bil);
         $add('SP_D_ATT', 'D) Ratei e risconti attivi', $g, $bil);
@@ -181,8 +206,8 @@ final class IR_Catalog
         $add('SP_B_FONDI', 'B) Fondi per rischi e oneri (totale)', $g, $bil);
         $add('SP_C_TFR', 'C) Trattamento di fine rapporto di lavoro subordinato', $g, $bil);
         $add('SP_D_TOT', 'D) Debiti — totale', $g, $bil);
-        $add('SP_D_ENTRO', 'D) Debiti — di cui esigibili entro l\'esercizio successivo', $g, $bil);
-        $add('SP_D_OLTRE', 'D) Debiti — di cui esigibili oltre l\'esercizio successivo', $g, $bil);
+        $add('SP_D_ENTRO', 'D) Debiti — di cui esigibili entro l\'esercizio successivo', $g, $bil, 'eur', 'Solo se è una riga del prospetto riferita al totale dei debiti (schema abbreviato). Nello schema ordinario non esiste: non ricavarla dalla Nota Integrativa.');
+        $add('SP_D_OLTRE', 'D) Debiti — di cui esigibili oltre l\'esercizio successivo', $g, $bil, 'eur', 'Solo se è una riga del prospetto riferita al totale dei debiti (schema abbreviato). Nello schema ordinario usa i codici SP_D*_OLTRE delle singole voci.');
         $add('SP_D1', 'D.1) Obbligazioni (totale)', $g, $bil);
         $add('SP_D2', 'D.2) Obbligazioni convertibili (totale)', $g, $bil);
         $add('SP_D3', 'D.3) Debiti verso soci per finanziamenti (totale)', $g, $bil);
@@ -193,6 +218,15 @@ final class IR_Catalog
         $add('SP_D5_ENTRO', 'D.5) Debiti verso altri finanziatori esigibili entro l\'esercizio successivo', $g, $bil);
         $add('SP_D5_OLTRE', 'D.5) Debiti verso altri finanziatori esigibili oltre l\'esercizio successivo', $g, $bil);
         $add('SP_D7', 'D.7) Debiti verso fornitori (totale)', $g, $bil);
+        $add('SP_D9', 'D.9) Debiti verso imprese controllate (totale)', $g, $bil);
+        $add('SP_D10', 'D.10) Debiti verso imprese collegate (totale)', $g, $bil);
+        $add('SP_D11', 'D.11) Debiti verso controllanti (totale)', $g, $bil);
+        $add('SP_D11BIS', 'D.11-bis) Debiti verso imprese sottoposte al controllo delle controllanti (totale)', $g, $bil);
+        foreach (self::DEBITI_VOCI as $sfx => $lbl) {
+            if (!isset($d['SP_D' . $sfx . '_OLTRE'])) {
+                $add('SP_D' . $sfx . '_OLTRE', "D.$lbl — esigibili oltre l'esercizio successivo", $g, $bil, 'eur', 'Riga "esigibili oltre l\'esercizio successivo" della singola voce nel prospetto di Stato Patrimoniale (schema ordinario), per ogni colonna.');
+            }
+        }
         $add('SP_D12', 'D.12) Debiti tributari (totale)', $g, $bil);
         $add('SP_D13', 'D.13) Debiti verso istituti di previdenza e sicurezza sociale (totale)', $g, $bil);
         $add('SP_E_PASS', 'E) Ratei e risconti passivi', $g, $bil);
@@ -345,6 +379,11 @@ final class IR_Catalog
             'protesti' => 'Protesti / procedure / pregiudizievoli',
             'tipo_bilancio' => 'Tipologia di bilancio (ordinario / abbreviato / micro)',
             'principi_contabili' => 'Cambiamenti di principi contabili o operazioni straordinarie',
+            'attivita_svolta' => 'Attività effettivamente svolta',
+            'gruppo' => 'Appartenenza a un gruppo, controllo e rapporti con parti correlate',
+            'eventi_successivi' => "Fatti di rilievo avvenuti dopo la chiusura dell'esercizio",
+            'contenziosi' => 'Contenziosi e passività potenziali',
+            'continuita' => 'Continuità aziendale (valutazioni degli amministratori)',
             'altro' => 'Altra informazione rilevante',
         ];
     }

@@ -22,6 +22,7 @@ final class IR_Document
         $warnings = [];
         $blocks = [];
         $placed = [];
+        self::$factNumbers = self::fact_numbers($state);
         $lines = preg_split('/\r\n|\n/', $text);
         $para = [];
         $list = null;
@@ -41,6 +42,11 @@ final class IR_Document
 
         foreach ($lines as $raw) {
             $line = trim($raw);
+            // residui di formattazione che non devono arrivare al lettore
+            if (preg_match('/^(```.*|[-*_]{3,}|={3,})$/u', $line)) {
+                $line = '';
+            }
+            $line = preg_replace('/^>\s*/u', '', $line);
             if ($line === '') {
                 $flushPara();
                 $flushList();
@@ -93,11 +99,41 @@ final class IR_Document
         return ['blocks' => $blocks, 'warnings' => array_values(array_unique($warnings))];
     }
 
+    /** Numeri presenti nei fatti documentati: se ripresi nel testo non sono "numeri senza fonte". */
+    private static array $factNumbers = [];
+
+    private static function norm_number(string $n): string
+    {
+        return preg_replace('/[\s€x]/u', '', $n);
+    }
+
+    private static function fact_numbers(array $state): array
+    {
+        $set = [];
+        foreach ($state['extraction']['info'] ?? [] as $i) {
+            if (preg_match_all(self::NUM_PATTERN, $i['value'], $m)) {
+                foreach ($m[0] as $n) {
+                    $set[self::norm_number($n)] = true;
+                }
+            }
+        }
+        return $set;
+    }
+
+    /** Elimina i residui di sintassi Markdown da un tratto di testo semplice. */
+    public static function clean_text(string $t): string
+    {
+        $t = str_replace(['`', '⟦', '⟧'], '', $t);
+        $t = preg_replace('/(?<![\p{L}\p{N}])[*_]+(?=[\p{L}\p{N}"«“(])|(?<=[\p{L}\p{N}"»”).,;:!?])[*_]+(?![\p{L}\p{N}])/u', '', $t);
+        $t = preg_replace('/\*+/u', '', $t);
+        return preg_replace('/^#{1,6}\s+/u', '', $t);
+    }
+
     private static function inline(string $s, array $calc, array $state, array &$warnings): array
     {
         $runs = [];
         $bold = false;
-        $parts = preg_split('/(\[\[(?:K|V|I):[^\]]+\]\]|⟦C:\d+⟧|\*\*)/u', $s, -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY);
+        $parts = preg_split('/(\[\[(?:K|V|I|F):[^\]]+\]\]|⟦C:\d+⟧|\*\*)/u', $s, -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY);
         foreach ($parts as $part) {
             if ($part === '**') {
                 $bold = !$bold;
@@ -105,6 +141,14 @@ final class IR_Document
             }
             if (preg_match('/^⟦C:(\d+)⟧$/u', $part, $m)) {
                 $runs[] = ['t' => 'cite', 'c' => (int) $m[1]];
+                continue;
+            }
+            if (preg_match('/^\[\[F:([^\]]+)\]\]$/', $part, $m)) {
+                // marcatore di fonte di un fatto riformulato: invisibile al lettore, serve alla tracciabilità
+                $ref = 'I:' . trim($m[1]);
+                if (self::ref_display($ref, $calc, $state) !== null) {
+                    $runs[] = ['t' => 'src', 'ref' => $ref];
+                }
                 continue;
             }
             if (preg_match('/^\[\[(K|V|I):([^\]]+)\]\]$/', $part, $m)) {
@@ -119,9 +163,13 @@ final class IR_Document
                 continue;
             }
             // testo semplice: segnala numeri non collegati a una fonte
+            $part = self::clean_text($part);
             $offset = 0;
             if (preg_match_all(self::NUM_PATTERN, $part, $mm, PREG_OFFSET_CAPTURE)) {
                 foreach ($mm[0] as [$match, $pos]) {
+                    if (isset(self::$factNumbers[self::norm_number($match)])) {
+                        continue; // numero contenuto in un fatto documentato
+                    }
                     if ($pos > $offset) {
                         $runs[] = ['t' => 'text', 'v' => substr($part, $offset, $pos - $offset), 'b' => $bold];
                     }
@@ -178,6 +226,84 @@ final class IR_Document
         return [['t' => 'link', 'v' => $label, 'href' => $url]];
     }
 
+    /**
+     * Numerazione progressiva dei capitoli effettivamente presenti nel report: i capitoli non
+     * selezionati o esclusi (analitici senza indicatori calcolabili) non lasciano buchi.
+     * @return array<string,int> id sezione => numero
+     */
+    public static function numbering(array $state): array
+    {
+        $calc = $state['kpi'] ?? null;
+        $tb = $calc ? new IR_Tables($state, $calc) : null;
+        $map = [];
+        $n = 0;
+        foreach (IR_Catalog::sections() as $sid => $s) {
+            if (!in_array($sid, $state['sections_selected'] ?? [], true)) {
+                continue;
+            }
+            if (($state['report']['sections'][$sid]['status'] ?? '') === 'skipped') {
+                continue;
+            }
+            if ($tb && $s['kind'] === 'analitica' && $sid !== 'S22' && !$tb->for_section($sid)) {
+                continue;
+            }
+            $map[$sid] = ++$n;
+        }
+        return $map;
+    }
+
+    public static function section_title(string $sid, ?int $num): string
+    {
+        if ($sid === 'S0') {
+            return 'Sommario esecutivo';
+        }
+        $s = IR_Catalog::sections()[$sid];
+        return ($num ? $num . '. ' : '') . $s['title'];
+    }
+
+    /** Riallinea al numero definitivo le intestazioni "N.M Titolo" scritte durante la stesura. */
+    private static function renumber_blocks(array $blocks, int $num, array $hiddenCites): array
+    {
+        $fix = static function (array $inline) use ($hiddenCites): array {
+            $out = [];
+            foreach ($inline as $r) {
+                if (($r['t'] ?? '') === 'cite' && isset($hiddenCites[$r['c']])) {
+                    continue;
+                }
+                if (($r['t'] ?? '') === 'text') {
+                    $r['v'] = self::clean_text($r['v']);
+                }
+                $out[] = $r;
+            }
+            return $out;
+        };
+        foreach ($blocks as &$b) {
+            if (isset($b['inline'])) {
+                $b['inline'] = $fix($b['inline']);
+                if ($b['type'] === 'h2' && $num && isset($b['inline'][0]) && ($b['inline'][0]['t'] ?? '') === 'text') {
+                    $b['inline'][0]['v'] = preg_replace('/^\s*§?\s*\d+\.(\d+)/u', $num . '.$1', $b['inline'][0]['v']);
+                }
+            }
+            if (isset($b['items'])) {
+                $b['items'] = array_map($fix, $b['items']);
+            }
+        }
+        unset($b);
+        return $blocks;
+    }
+
+    /** Descrizione formale di un documento caricato, senza nome del file. */
+    public static function formal_doc_name(array $state, array $file): string
+    {
+        $doc = $state['extraction']['docs'][$file['id']] ?? null;
+        $tipo = trim((string) ($doc['tipo'] ?? ''));
+        $tipo = trim(preg_replace('/\s*[-—–]\s*(scala|importi)\b.*$/iu', '', $tipo), " .\t\n");
+        if ($tipo !== '' && mb_strlen($tipo) <= 260) {
+            return mb_strtoupper(mb_substr($tipo, 0, 1)) . mb_substr($tipo, 1);
+        }
+        return IR_Catalog::documents()[$file['slot']]['name'] ?? 'Documento aziendale';
+    }
+
     /** Modello completo del report. */
     public static function build(array $state): array
     {
@@ -185,11 +311,51 @@ final class IR_Document
         $calc = $state['kpi'] ?? ['nodes' => [], 'data' => [], 'checks' => [], 'periods' => ['annual' => []]];
         $report = $state['report'] ?? ['sections' => []];
         $catalog = IR_Catalog::sections();
-        $fin = IR_Catalog::finalita()[$profile['finalita']]['label'] ?? '';
+        $finDef = IR_Catalog::finalita()[$profile['finalita']] ?? null;
+        $fin = $finDef['label'] ?? '';
         $finTxt = $fin . ($profile['finalita_altro'] ? ' — ' . $profile['finalita_altro'] : '');
         $periods = $calc['periods']['annual'] ?? [];
         $periodTxt = $periods ? (count($periods) > 1 ? 'esercizi ' . reset($periods) . '-' . end($periods) : 'esercizio ' . reset($periods)) : ($profile['esercizi'] ?: 'n.d.');
         $date = IR_Format::date_it((int) ($report['generated_at'] ?? time()));
+
+        // sezioni in ordine, con numerazione progressiva
+        $numbering = self::numbering($state);
+        $order = array_merge(['S0'], array_values(array_filter(array_keys($catalog), static fn($s) => in_array($s, $state['sections_selected'], true))));
+        $sections = [];
+        $n = 0;
+        foreach ($order as $sid) {
+            $sec = $report['sections'][$sid] ?? null;
+            if (!$sec || ($sec['status'] ?? '') !== 'ok') {
+                continue;
+            }
+            $num = $sid === 'S0' ? null : ++$n;
+            // le citazioni che non puntano a un documento del cliente non vengono mai esposte
+            $hidden = [];
+            foreach ($sec['citations'] as $ci => $c) {
+                if (!in_array($c['src']['kind'] ?? '', ['file', 'interview'], true)) {
+                    $hidden[$ci] = true;
+                    $sec['citations'][$ci]['hidden'] = true;
+                }
+            }
+            $tables = $sec['tables'];
+            if (isset($tables['benchmark']) && ($note = IR_Context::benchmark_note($state)) && !in_array($note, $tables['benchmark']['notes'], true)) {
+                $tables['benchmark']['notes'][] = $note;
+            }
+            $sections[] = ['id' => $sid, 'num' => $num, 'title' => self::section_title($sid, $num), 'blocks' => self::renumber_blocks($sec['blocks'], (int) $num, $hidden), 'tables' => $tables, 'citations' => $sec['citations'], 'warnings' => $sec['warnings']];
+        }
+
+        // perimetro: analisi richieste dalla finalità ma non presenti nel report
+        $present = array_column($sections, 'id');
+        $missing = [];
+        foreach ($finDef['mandatory'] ?? [] as $sid) {
+            if (!in_array($sid, $present, true)) {
+                $missing[] = $catalog[$sid]['title'];
+            }
+        }
+        $coverFin = $finTxt;
+        if ($missing && $present) {
+            $coverFin = 'Analisi economico-finanziaria — perimetro parziale rispetto alla finalità «' . $fin . '»';
+        }
 
         $meta = [
             'ragione_sociale' => $profile['ragione_sociale'],
@@ -197,15 +363,22 @@ final class IR_Document
             'piva' => $profile['partita_iva'],
             'data' => $date,
             'periodo' => $periodTxt,
-            'finalita' => $finTxt,
+            'finalita' => $coverFin,
+            'finalita_dichiarata' => $finTxt,
+            'perimetro_parziale' => (bool) ($missing && $present),
             'studio' => (string) get_option('ir_studio', 'Integra'),
             'sito' => (string) get_option('ir_sito', ''),
             'consulente' => (string) get_option('ir_consulente', ''),
         ];
 
         $premessa = [
-            self::p("Il presente Report di Consulenza è stato redatto nell'ambito di un'analisi economico-finanziaria e strategica della società {$profile['ragione_sociale']}, con finalità: {$finTxt}."),
-            self::p("L'analisi è stata condotta sulla base della documentazione fornita dalla committente e delle informazioni rese disponibili durante l'attività consulenziale. L'elenco completo dei documenti analizzati è riportato nella sezione \"Checklist delle operazioni\" al termine del presente documento."),
+            self::p("Il presente Report di Consulenza è stato redatto nell'ambito di un'analisi economico-finanziaria e strategica della società {$profile['ragione_sociale']}, con finalità: " . rtrim($finTxt, '. ') . '.'),
+        ];
+        if ($missing && $present) {
+            $premessa[] = self::p('Rispetto al perimetro previsto per questa finalità, il report non comprende le seguenti analisi: ' . implode('; ', $missing) . '. Il documento copre pertanto solo in parte tale perimetro e non può essere utilizzato come valutazione completa ai fini della finalità indicata.');
+        }
+        $premessa = array_merge($premessa, [
+            self::p("L'analisi è stata condotta sulla base della documentazione fornita dalla committente e delle informazioni rese disponibili durante l'attività consulenziale. L'elenco dei documenti esaminati è riportato nella sezione \"Documentazione esaminata e perimetro dell'analisi\"."),
             ['type' => 'h2', 'inline' => [['t' => 'text', 'v' => 'Metodologia applicata']]],
             self::p("L'analisi si articola in sezioni modulari, ciascuna sviluppata solo qualora la documentazione necessaria fosse disponibile e di qualità adeguata. Le formule e i criteri di calcolo applicati seguono:"),
             self::ul([
@@ -217,31 +390,88 @@ final class IR_Document
                 'la normativa specifica per la Regione Siciliana in materia di agevolazioni (ZES Unica, IRFIS, leggi regionali vigenti).',
             ]),
             ['type' => 'h2', 'inline' => [['t' => 'text', 'v' => 'Tracciabilità dei dati e dei calcoli']]],
-            self::p("Ogni dato numerico è stato estratto dai documenti con indicazione del documento, della pagina e del passaggio testuale di riferimento; ogni indicatore è stato calcolato con formula esplicita da un motore di calcolo deterministico, senza stime né arrotondamenti intermedi. Le appendici riportano, per ciascun valore citato, la formula applicata, i valori utilizzati e la fonte. Gli schemi di bilancio sono stati sottoposti a controlli automatici di quadratura."),
+            self::p("Ogni dato numerico è stato tratto dai documenti esaminati, con registrazione del documento, della pagina e del passaggio di riferimento; ogni indicatore è stato calcolato con formula esplicita, senza stime né arrotondamenti intermedi. I valori dei prospetti contabili sono quelli degli schemi ufficiali di bilancio; per gli esercizi i cui saldi sono stati riesposti nel bilancio successivo sono stati utilizzati i saldi riesposti. Gli schemi riclassificati sono stati sottoposti a controlli di quadratura con i totali di bilancio. Il dettaglio di formule, fonti e controlli è conservato nel fascicolo di lavoro dello studio."),
             ['type' => 'h2', 'inline' => [['t' => 'text', 'v' => 'Limitazioni']]],
             self::p("Per ogni indicatore o sezione che non è stato possibile sviluppare per assenza o incompletezza di documentazione è riportata la dicitura \"Dato non valutabile per assenza di documentazione specifica\" oppure \"non valutabile\". Nessun dato è stato inventato, stimato per analogia o desunto in via presuntiva."),
             self::p('Il presente report ha valore esclusivamente consulenziale e gestionale. Non costituisce certificazione di bilancio, revisione legale dei conti, parere legale o fiscale vincolante. Le valutazioni espresse sono frutto di analisi tecnica condotta in buona fede sulla base delle informazioni disponibili alla data di emissione.'),
-        ];
-
-        // sezioni in ordine
-        $order = array_merge(['S0'], array_values(array_filter(array_keys($catalog), static fn($s) => in_array($s, $state['sections_selected'], true))));
-        $sections = [];
-        foreach ($order as $sid) {
-            $sec = $report['sections'][$sid] ?? null;
-            if (!$sec || ($sec['status'] ?? '') !== 'ok') {
-                continue;
-            }
-            $sections[] = ['id' => $sid, 'title' => $sec['title'], 'blocks' => $sec['blocks'], 'tables' => $sec['tables'], 'citations' => $sec['citations'], 'warnings' => $sec['warnings']];
-        }
+        ]);
 
         return [
             'meta' => $meta,
             'premessa' => $premessa,
             'sections' => $sections,
+            'documentazione' => self::documentazione($state, $sections, $missing),
+            'appendice' => self::appendice_contabile($state),
             'checklist' => self::checklist($state, $sections),
             'fonti' => self::fonti(),
             'disclaimer' => self::disclaimer($state),
         ];
+    }
+
+    /** Sezione destinata al cliente: documenti esaminati (descrizione formale) e perimetro dell'analisi. */
+    private static function documentazione(array $state, array $sections, array $missing): array
+    {
+        $b = [];
+        $b[] = ['type' => 'h2', 'inline' => [['t' => 'text', 'v' => 'Documenti esaminati']]];
+        $items = [];
+        foreach ($state['files'] as $f) {
+            if (($f['extraction']['status'] ?? '') === 'error') {
+                continue;
+            }
+            $items[self::formal_doc_name($state, $f)] = true;
+        }
+        if (trim((string) ($state['interview']['text'] ?? '')) !== '') {
+            $items['Intervista al management' . (!empty($state['interview']['date']) ? ' del ' . $state['interview']['date'] : '')] = true;
+        }
+        $b[] = $items ? self::ul(array_keys($items)) : self::p('Nessun documento.');
+
+        $limited = [];
+        foreach ($sections as $s) {
+            if ($s['id'] === 'S0') {
+                continue;
+            }
+            $nv = [];
+            foreach ($s['tables'] as $t) {
+                foreach ($t['rows'] as $r) {
+                    foreach ($r['cells'] as $c) {
+                        if ($c['v'] === 'n.v.') {
+                            $nv[$r['label']] = true;
+                        }
+                    }
+                }
+            }
+            if ($nv) {
+                $limited[] = $s['title'] . ' — indicatori non valutabili per assenza di documentazione specifica: ' . implode(', ', array_slice(array_keys($nv), 0, 8)) . (count($nv) > 8 ? ' e altri' : '') . '.';
+            }
+        }
+        if ($limited || $missing) {
+            $b[] = ['type' => 'h2', 'inline' => [['t' => 'text', 'v' => "Limiti del perimetro dell'analisi"]]];
+            if ($missing) {
+                $b[] = self::p('Analisi previste dalla finalità del report e non comprese nel presente documento: ' . implode('; ', $missing) . '.');
+            }
+            if ($limited) {
+                $b[] = self::ul($limited);
+            }
+        }
+        return $b;
+    }
+
+    /** Appendice contabile del report per il cliente: prospetti riclassificati e indici. */
+    private static function appendice_contabile(array $state): array
+    {
+        if (empty($state['kpi'])) {
+            return [];
+        }
+        $tb = new IR_Tables($state, $state['kpi']);
+        $out = [];
+        foreach (['sp_finanziario', 'sp_funzionale', 'ce_va', 'rendiconto', 'indici_reddituali', 'indici_liquidita', 'indici_solidita', 'indici_finanziari'] as $tid) {
+            $t = $tb->build($tid);
+            if ($t) {
+                $t['notes'] = [];
+                $out[] = $t;
+            }
+        }
+        return $out;
     }
 
     private static function checklist(array $state, array $sections): array
@@ -302,15 +532,15 @@ final class IR_Document
             if (in_array($sid, $state['sections_selected'], true)) {
                 $r = $state['report']['sections'][$sid] ?? null;
                 if ($r && ($r['status'] ?? '') === 'skipped') {
-                    $not[] = "§{$s['n']} {$s['title']} — Motivo: {$r['reason']}; sezione esclusa per non presentare un capitolo privo di contenuti valutabili";
+                    $not[] = "{$s['title']} — Motivo: {$r['reason']}; sezione esclusa per non presentare un capitolo privo di contenuti valutabili";
                 }
                 continue;
             }
             if (!$enabled[$sid]['enabled']) {
                 $miss = array_map(static fn($g) => implode(' oppure ', $g), $enabled[$sid]['missing']);
-                $not[] = "§{$s['n']} {$s['title']} — Motivo: documentazione mancante (" . implode('; ', $miss) . ')';
+                $not[] = "{$s['title']} — Motivo: documentazione mancante (" . implode('; ', $miss) . ')';
             } else {
-                $not[] = "§{$s['n']} {$s['title']} — Motivo: non selezionata per la finalità del report";
+                $not[] = "{$s['title']} — Motivo: non selezionata per la finalità del report";
             }
         }
         $b[] = ['type' => 'h2', 'inline' => [['t' => 'text', 'v' => 'Analisi non effettuate']]];
@@ -343,6 +573,7 @@ final class IR_Document
                 "Controlli di quadratura superati: {$ok}; non superati: {$ko}.",
                 "Dati inseriti o corretti manualmente dal consulente (con nota motivata): {$manual}.",
                 'Cruscotto KPI approvato da ' . ($kpi['approved_by'] ?? 'n.d.') . (isset($kpi['approved_at']) ? ' il ' . IR_Format::date_it((int) $kpi['approved_at']) : '') . '.',
+                'Parametri del modello di calcolo: ' . IR_Params::get()['versione'] . '.',
             ]);
         }
         return $b;
@@ -381,7 +612,6 @@ final class IR_Document
                 $L("Banca d'Italia — Centrale dei Rischi", 'https://www.bancaditalia.it/servizi-cittadino/servizi/accesso-cr'),
                 $L('ABI — Associazione Bancaria Italiana', 'https://www.abi.it/'),
             ]),
-            self::p('Parametri del modello di calcolo: ' . IR_Params::get()['versione'] . '.'),
         ];
     }
 
@@ -411,7 +641,7 @@ final class IR_Document
         $refs = [];
         $walkInline = static function (array $inline) use (&$refs) {
             foreach ($inline as $r) {
-                if (($r['t'] ?? '') === 'ref') {
+                if (in_array($r['t'] ?? '', ['ref', 'src'], true)) {
                     $refs[$r['ref']] = true;
                 }
             }

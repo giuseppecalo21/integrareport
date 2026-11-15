@@ -3,7 +3,14 @@
  * Consolidamento dei dati estratti.
  * Per ogni coppia codice@periodo:
  *  - un solo valore, o più fonti concordi → valore accettato (con numero di conferme);
- *  - fonti discordanti → CONFLITTO: il valore resta nullo finché il consulente non sceglie;
+ *  - fonti discordanti, voci di bilancio annuali → si applicano due regole contabili fisse:
+ *      1. saldi riesposti: se il bilancio di un esercizio successivo riporta, nella colonna
+ *         comparativa, un valore diverso da quello del fascicolo originario, prevale il bilancio
+ *         più recente (i comparativi riclassificati sostituiscono i saldi originari);
+ *      2. prospetto ufficiale: a parità di bilancio, il valore letto nel prospetto prevale su
+ *         quello letto in Nota Integrativa.
+ *    Il dato risolto così è marcato "auto" con la regola applicata e i valori scartati;
+ *  - fonti discordanti negli altri casi → CONFLITTO: il valore resta nullo finché il consulente non sceglie;
  *  - correzione manuale → ammessa solo con nota obbligatoria; il valore originale resta in traccia.
  */
 
@@ -28,6 +35,8 @@ final class IR_Dataset
                 $groups[$key] = [];
             }
         }
+
+        $docYear = self::document_years($state['extraction']['candidates']);
 
         $out = [];
         foreach ($groups as $key => $cands) {
@@ -96,7 +105,16 @@ final class IR_Dataset
                         $entry['status'] = 'to_verify';
                     }
                 } elseif (count($distinct) > 1) {
-                    $entry['status'] = 'conflict';
+                    $auto = self::auto_resolve($code, $period, $cands, $docYear);
+                    if ($auto) {
+                        $entry['value'] = (float) $auto['cand']['value'];
+                        $entry['source'] = $auto['cand'];
+                        $entry['status'] = 'auto';
+                        $entry['confirmations'] = $auto['confirmations'];
+                        $entry['auto'] = ['rule' => $auto['rule'], 'note' => $auto['note'], 'discarded' => $auto['discarded']];
+                    } else {
+                        $entry['status'] = 'conflict';
+                    }
                 }
             }
             if ($ov && $ov['type'] === 'confirm') {
@@ -111,9 +129,93 @@ final class IR_Dataset
         return $out;
     }
 
+    /** Esercizio di riferimento di ciascun file di bilancio: l'anno più recente tra i suoi valori di SP/CE/RF. */
+    private static function document_years(array $candidates): array
+    {
+        $years = [];
+        foreach ($candidates as $c) {
+            if (in_array($c['slot'] ?? '', ['B1', 'B2', 'B6'], true) && preg_match('/^(SP|CE|RF)_/', $c['code']) && preg_match('/^\d{4}$/', (string) $c['period'])) {
+                $years[$c['file_id']] = max($years[$c['file_id']] ?? 0, (int) $c['period']);
+            }
+        }
+        return $years;
+    }
+
+    private static function distinct_values(array $cands): array
+    {
+        $distinct = [];
+        foreach ($cands as $c) {
+            $v = (float) $c['value'];
+            $found = false;
+            foreach ($distinct as $d) {
+                if (abs($d - $v) <= self::TOLERANCE) {
+                    $found = true;
+                }
+            }
+            if (!$found) {
+                $distinct[] = $v;
+            }
+        }
+        return $distinct;
+    }
+
+    /**
+     * Risoluzione automatica dei conflitti sulle voci di bilancio annuali.
+     * Restituisce null se nessuna regola è applicabile in modo univoco.
+     */
+    private static function auto_resolve(string $code, string $period, array $cands, array $docYear): ?array
+    {
+        if (!preg_match('/^(SP|CE|RF)_/', $code) || !preg_match('/^\d{4}$/', $period)) {
+            return null;
+        }
+        foreach ($cands as $c) {
+            if (!isset($docYear[$c['file_id']])) {
+                return null; // una fonte non è un bilancio: decide il consulente
+            }
+        }
+        $rules = [];
+        $pool = $cands;
+
+        // 1. saldi riesposti: prevale il bilancio più recente
+        $maxYear = max(array_map(static fn($c) => $docYear[$c['file_id']], $pool));
+        $newer = array_values(array_filter($pool, static fn($c) => $docYear[$c['file_id']] === $maxYear));
+        if (count($newer) < count($pool)) {
+            $rules[] = 'riesposto';
+            $pool = $newer;
+        }
+        // 2. a parità di bilancio prevale il prospetto ufficiale
+        if (count(self::distinct_values($pool)) > 1) {
+            $prosp = array_values(array_filter($pool, static fn($c) => ($c['origine'] ?? '') === 'prospetto'));
+            if ($prosp && count($prosp) < count($pool)) {
+                $rules[] = 'prospetto';
+                $pool = $prosp;
+            }
+        }
+        if (!$rules || count(self::distinct_values($pool)) !== 1) {
+            return null;
+        }
+        $rank = ['alta' => 0, 'media' => 1, 'bassa' => 2];
+        usort($pool, static fn($a, $b) => (($a['stato'] === 'rilevato' ? 0 : 10) + $rank[$a['aff']]) <=> (($b['stato'] === 'rilevato' ? 0 : 10) + $rank[$b['aff']]));
+        $chosen = $pool[0];
+        $discarded = [];
+        foreach ($cands as $c) {
+            if (abs((float) $c['value'] - (float) $chosen['value']) > self::TOLERANCE) {
+                $discarded[] = ['value' => (float) $c['value'], 'file_id' => $c['file_id'], 'page' => $c['page'] ?? null, 'origine' => $c['origine'] ?? null];
+            }
+        }
+        $notes = [];
+        if (in_array('riesposto', $rules, true)) {
+            $notes[] = "saldo riesposto: utilizzato il valore della colonna comparativa del bilancio {$maxYear}, che sostituisce quello del fascicolo originario";
+        }
+        if (in_array('prospetto', $rules, true)) {
+            $notes[] = 'utilizzato il valore del prospetto ufficiale, che prevale su quello della Nota Integrativa';
+        }
+        return ['cand' => $chosen, 'rule' => implode('+', $rules), 'note' => ucfirst(implode('; ', $notes)) . '.', 'discarded' => $discarded, 'confirmations' => count($pool)];
+    }
+
     public static function summary(array $resolved): array
     {
-        $s = ['totale' => 0, 'conflitti' => 0, 'da_verificare' => 0, 'manuali' => 0];
+        $s = ['totale' => 0, 'conflitti' => 0, 'da_verificare' => 0, 'manuali' => 0, 'automatici' => 0];
         foreach ($resolved as $e) {
             $s['totale']++;
             if ($e['status'] === 'conflict') {
@@ -124,6 +226,9 @@ final class IR_Dataset
             }
             if ($e['status'] === 'manual') {
                 $s['manuali']++;
+            }
+            if ($e['status'] === 'auto') {
+                $s['automatici']++;
             }
         }
         return $s;

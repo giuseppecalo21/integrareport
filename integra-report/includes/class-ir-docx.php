@@ -3,7 +3,14 @@
  * Esportazione .docx (OOXML scritto direttamente, nessuna dipendenza esterna).
  * Design system Integra: Arial; H1 706F6F 18pt; H2 009FE3 13pt; tabelle con intestazione 009FE3,
  * righe alternate F4F4F4/FFFFFF, bordi CCCCCC, larghezze in DXA; copertina con banda laterale blu.
- * Ogni numero è un collegamento interno all'appendice di tracciabilità (formula, valori, fonte).
+ *
+ * Due documenti distinti:
+ *  - "cliente": il report consulenziale (copertina, premessa, capitoli, documentazione esaminata,
+ *    appendice contabile, fonti, disclaimer). Nessun nome di file, nessun nome utente, nessun
+ *    avviso di lavorazione, nessuna citazione di materiali interni;
+ *  - "audit": il fascicolo di audit interno, a uso esclusivo dello studio (checklist di
+ *    validazione, controlli di quadratura, avvisi sul testo, tracciabilità di ogni calcolo e di
+ *    ogni dato, citazioni documentali).
  */
 
 if (!defined('ABSPATH')) {
@@ -28,8 +35,11 @@ final class IR_Docx
     private array $cites = [];       // numero globale => citazione
     private int $bmId = 1;
 
-    public function __construct(array $state)
+    private string $kind;
+
+    public function __construct(array $state, string $kind = 'cliente')
     {
+        $this->kind = $kind === 'audit' ? 'audit' : 'cliente';
         $this->state = $state;
         $this->model = IR_Document::build($state);
         $this->calc = $state['kpi'] ?? ['nodes' => [], 'data' => []];
@@ -42,8 +52,13 @@ final class IR_Docx
 
     public function filename(): string
     {
-        $name = sanitize_file_name($this->state['profile']['ragione_sociale'] ?: 'Report');
-        return 'Report_Consulenza_' . $name . '_' . wp_date('Y-m-d') . '.docx';
+        $name = sanitize_file_name($this->state['profile']['ragione_sociale'] ?: 'Azienda');
+        return ($this->kind === 'audit' ? 'Fascicolo_Audit_Interno_' : 'Report_Consulenziale_') . $name . '_' . wp_date('Y-m-d') . '.docx';
+    }
+
+    private function audit(): bool
+    {
+        return $this->kind === 'audit';
     }
 
     /** Genera il file e restituisce il percorso temporaneo. */
@@ -58,7 +73,7 @@ final class IR_Docx
             $this->bm[$r] = 'ir_r' . (++$i);
         }
 
-        $body = $this->cover() . $this->content($refs);
+        $body = $this->cover() . ($this->audit() ? $this->content_audit($refs) : $this->content_cliente());
         $doc = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             . '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
             . '<w:body>' . $body . '</w:body></w:document>';
@@ -178,6 +193,9 @@ final class IR_Docx
 
     private function ref_run(string $ref, string $text, bool $bold = false): string
     {
+        if (!$this->audit()) {
+            return $this->run($text, ['b' => $bold]);
+        }
         $r = $this->run($text, ['style' => 'IrRef', 'b' => $bold]);
         return isset($this->bm[$ref]) ? '<w:hyperlink w:anchor="' . $this->bm[$ref] . '">' . $r . '</w:hyperlink>' : $r;
     }
@@ -202,18 +220,21 @@ final class IR_Docx
                     $out .= $this->ref_run($r['ref'], $r['v'], $b);
                     break;
                 case 'flag':
-                    $out .= $this->run($r['v'], ['b' => $b, 'hl' => 'yellow']);
+                    // l'evidenziazione dei numeri da verificare è uno strumento di revisione interno
+                    $out .= $this->run($r['v'], $this->audit() ? ['b' => $b, 'hl' => 'yellow'] : ['b' => $b]);
                     break;
                 case 'bad':
-                    $out .= $this->run($r['v'], ['hl' => 'red']);
+                    $out .= $this->audit() ? $this->run($r['v'], ['hl' => 'red']) : $this->run('dato non disponibile');
                     break;
+                case 'src':
+                    break; // marcatore di fonte: non visibile nel testo
                 case 'link':
                     $out .= $this->ext_link($r['v'], $r['href']);
                     break;
                 case 'cite':
                     $key = $sid . ':' . $r['c'];
                     $n = $this->citeIndex[$key] ?? null;
-                    if ($n !== null) {
+                    if ($n !== null && $this->audit()) {
                         $out .= '<w:hyperlink w:anchor="ir_c' . $n . '">' . $this->run('[' . $n . ']', ['sup' => true, 'color' => self::BLUE]) . '</w:hyperlink>';
                     }
                     break;
@@ -294,7 +315,8 @@ final class IR_Docx
             $xml .= '<w:tr><w:trPr><w:cantSplit/></w:trPr>';
             $xml .= $this->cell($this->run($r['label'], ['b' => !empty($r['total'])]), $widths[0], $rowFill);
             foreach ($r['cells'] as $ci => $c) {
-                $content = !empty($c['ref']) ? $this->ref_run($c['ref'], $c['v'], !empty($r['total'])) : $this->run($c['v'], ['b' => !empty($r['total'])]);
+                $val = preg_match('/^[−-]?\d/u', $c['v']) ? str_replace([' ', '−'], ["\u{00A0}", "−\u{2060}"], $c['v']) : $c['v'];
+                $content = !empty($c['ref']) ? $this->ref_run($c['ref'], $val, !empty($r['total'])) : $this->run($val, ['b' => !empty($r['total'])]);
                 $fill = isset($c['level'], $fills[$c['level']]) ? $fills[$c['level']] : $rowFill;
                 $xml .= $this->cell($content, $widths[$ci + 1] ?? $rest, $fill, ['jc' => 'right']);
             }
@@ -314,16 +336,23 @@ final class IR_Docx
         $m = $this->model['meta'];
         $none = '<w:tcBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/></w:tcBorders>';
         $right = '';
-        $right .= $this->para($this->run('R E P O R T', ['b' => true, 'color' => self::GRAY, 'sz' => 72]), ['spacing' => [0, 120]]);
-        $right .= $this->para($this->run('Analisi Economico-Finanziaria', ['color' => self::BLUE, 'sz' => 28]), ['spacing' => [0, 40]]);
-        $right .= $this->para($this->run('e Strategica', ['color' => self::BLUE, 'sz' => 28]), ['spacing' => [0, 600]]);
-        $right .= $this->para($this->run('PREPARATO PER', ['b' => true, 'color' => self::GRAY, 'sz' => 22]), ['spacing' => [0, 80]]);
+        if ($this->audit()) {
+            $right .= $this->para($this->run('FASCICOLO', ['b' => true, 'color' => self::GRAY, 'sz' => 64]), ['spacing' => [0, 120]]);
+            $right .= $this->para($this->run('di Audit Interno', ['color' => self::BLUE, 'sz' => 28]), ['spacing' => [0, 40]]);
+            $right .= $this->para($this->run('Validazione dei dati e tracciabilità dei calcoli', ['color' => self::BLUE, 'sz' => 24]), ['spacing' => [0, 600]]);
+            $right .= $this->para($this->run('REPORT DI RIFERIMENTO', ['b' => true, 'color' => self::GRAY, 'sz' => 22]), ['spacing' => [0, 80]]);
+        } else {
+            $right .= $this->para($this->run('R E P O R T', ['b' => true, 'color' => self::GRAY, 'sz' => 72]), ['spacing' => [0, 120]]);
+            $right .= $this->para($this->run('Analisi Economico-Finanziaria', ['color' => self::BLUE, 'sz' => 28]), ['spacing' => [0, 40]]);
+            $right .= $this->para($this->run('e Strategica', ['color' => self::BLUE, 'sz' => 28]), ['spacing' => [0, 600]]);
+            $right .= $this->para($this->run('PREPARATO PER', ['b' => true, 'color' => self::GRAY, 'sz' => 22]), ['spacing' => [0, 80]]);
+        }
         $right .= $this->para($this->run($m['ragione_sociale'] ?: '—', ['b' => true, 'color' => self::GRAY, 'sz' => 36]), ['spacing' => [0, 80]]);
         $right .= $this->para($this->run($m['forma'] . ($m['piva'] ? '  │  P.IVA ' . $m['piva'] : ''), ['color' => self::GRAY, 'sz' => 22]), ['spacing' => [0, 600]]);
         $right .= $this->para($this->run($m['data'], ['color' => self::GRAY, 'sz' => 22]), ['spacing' => [0, 60]]);
         $right .= $this->para($this->run('Periodo di riferimento: ' . $m['periodo'], ['color' => self::BLUE, 'i' => true, 'sz' => 22]), ['spacing' => [0, 60]]);
         $right .= $this->para($this->run('Finalità: ' . $m['finalita'], ['color' => self::GRAY, 'sz' => 20]), ['spacing' => [0, 2400]]);
-        $right .= $this->para($this->run('Documento riservato — Versione 1.0 — Rev. del ' . $m['data'], ['color' => self::GRAY, 'sz' => 18]));
+        $right .= $this->para($this->run($this->audit() ? 'Uso esclusivo dello studio — non destinato al cliente — Rev. del ' . $m['data'] : 'Documento riservato — Versione 1.0 — Rev. del ' . $m['data'], ['color' => self::GRAY, 'sz' => 18]));
         if ($m['studio']) {
             $right .= $this->para($this->run($m['studio'] . ($m['sito'] ? '  │  ' . $m['sito'] : ''), ['color' => self::GRAY, 'sz' => 18]));
         }
@@ -344,53 +373,106 @@ final class IR_Docx
         return $this->para('', ['border' => true, 'spacing' => [0, 0], 'pagebreak' => $pagebreak]) . $this->para($this->run($text), ['style' => 'Heading1', 'keep' => true]);
     }
 
-    private function content(array $refs): string
-    {
-        $m = $this->model;
-        // numerazione globale delle citazioni
-        $n = 0;
-        foreach ($m['sections'] as $s) {
-            foreach ($s['citations'] as $ci => $c) {
-                $this->citeIndex[$s['id'] . ':' . $ci] = ++$n;
-                $this->cites[$n] = $c;
-            }
-        }
+    private const SECT = '<w:sectPr><w:headerReference w:type="default" r:id="rIdH1"/><w:footerReference w:type="default" r:id="rIdF1"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="567" w:footer="567" w:gutter="0"/></w:sectPr>';
 
-        $x = '';
-        // indice (campo TOC con elenco statico come risultato iniziale)
-        $x .= $this->para($this->run('Indice'), ['style' => 'Heading1']);
+    private function toc(array $titles): string
+    {
+        $x = $this->para($this->run('Indice'), ['style' => 'Heading1']);
         $x .= '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \\o "1-2" \\h \\z \\u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>'
-            . '<w:r><w:t xml:space="preserve">Premessa metodologica</w:t></w:r></w:p>';
-        foreach ($m['sections'] as $s) {
-            $x .= $this->para($this->run($s['title']));
-        }
-        foreach (['Checklist delle operazioni', 'Fonti normative e bibliografia', 'Disclaimer professionale', 'Appendice A — Tracciabilità dei calcoli', 'Appendice B — Registro dei dati estratti', 'Appendice C — Citazioni documentali'] as $t) {
+            . '<w:r><w:t xml:space="preserve">' . self::x(array_shift($titles)) . '</w:t></w:r></w:p>';
+        foreach ($titles as $t) {
             $x .= $this->para($this->run($t));
         }
         $x .= '<w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>';
-        $x .= $this->para($this->run("Per aggiornare l'indice con i numeri di pagina: in Word, clic destro sull'indice > Aggiorna campo.", ['i' => true, 'color' => self::GRAY, 'sz' => 16]));
+        return $x . $this->para($this->run("Per aggiornare l'indice con i numeri di pagina: in Word, clic destro sull'indice > Aggiorna campo.", ['i' => true, 'color' => self::GRAY, 'sz' => 16]));
+    }
+
+    /** Report consulenziale destinato al cliente. */
+    private function content_cliente(): string
+    {
+        $m = $this->model;
+        $titles = array_merge(['Premessa metodologica'], array_column($m['sections'], 'title'), ["Documentazione esaminata e perimetro dell'analisi"], $m['appendice'] ? ['Appendice — Prospetti contabili riclassificati e indici'] : [], ['Fonti normative e bibliografia', 'Disclaimer professionale']);
+        $x = $this->toc($titles);
 
         $x .= $this->h1('Premessa metodologica');
         $x .= $this->blocks($m['premessa']);
-
         foreach ($m['sections'] as $s) {
             $x .= $this->h1($s['title']);
             $x .= $this->blocks($s['blocks'], $s['id'], $s['tables']);
         }
-
-        $x .= $this->h1('Checklist delle operazioni');
-        $x .= $this->blocks($m['checklist']);
+        $x .= $this->h1("Documentazione esaminata e perimetro dell'analisi");
+        $x .= $this->blocks($m['documentazione']);
+        if ($m['appendice']) {
+            $x .= $this->h1('Appendice — Prospetti contabili riclassificati e indici');
+            $x .= $this->para($this->run('Prospetti riclassificati e indicatori calcolati sui bilanci degli esercizi esaminati. Importi in euro.'), ['jc' => 'both']);
+            foreach ($m['appendice'] as $t) {
+                $x .= $this->table($t);
+            }
+        }
         $x .= $this->h1('Fonti normative e bibliografia');
         $x .= $this->blocks($m['fonti']);
         $x .= $this->h1('Disclaimer professionale');
         $x .= $this->blocks($m['disclaimer']);
+        return $x . self::SECT;
+    }
+
+    /** Fascicolo di audit interno: validazione, controlli e tracciabilità. */
+    private function content_audit(array $refs): string
+    {
+        $m = $this->model;
+        // numerazione globale delle citazioni (solo documenti del cliente e intervista)
+        $n = 0;
+        foreach ($m['sections'] as $s) {
+            foreach ($s['citations'] as $ci => $c) {
+                if (!empty($c['hidden'])) {
+                    continue;
+                }
+                $this->citeIndex[$s['id'] . ':' . $ci] = ++$n;
+                $this->cites[$n] = $c + ['section' => $s['title']];
+            }
+        }
+
+        $x = $this->toc(['Checklist delle operazioni', 'Controlli di quadratura', 'Avvisi di controllo sul testo', 'Appendice A — Tracciabilità dei calcoli', 'Appendice B — Registro dei dati estratti', 'Appendice C — Citazioni documentali']);
+        $x .= $this->h1('Checklist delle operazioni');
+        $x .= $this->para($this->run('Documento di lavoro a uso esclusivo dello studio: contiene nomi dei file, esiti di lavorazione e riferimenti agli operatori. Non va consegnato al cliente.', ['i' => true, 'color' => self::GRAY]), ['jc' => 'both']);
+        $x .= $this->blocks($m['checklist']);
+
+        $x .= $this->h1('Controlli di quadratura');
+        $ctrl = (new IR_Tables($this->state, $this->calc + ['checks' => [], 'periods' => []]))->build('controlli');
+        $x .= $ctrl ? $this->table($ctrl) : $this->para($this->run('Nessun controllo eseguito.'));
+        foreach ($this->calc['checks'] ?? [] as $c) {
+            if ($c['ok'] === false && !empty($c['note'])) {
+                $x .= $this->para($this->run($c['label'] . ' — ' . IR_Format::period_label($c['period']) . ': ', ['b' => true]) . $this->run($c['note']), ['style' => 'IrSmall']);
+            }
+        }
+        $auto = array_filter($this->calc['data'] ?? [], static fn($e) => ($e['status'] ?? '') === 'auto');
+        if ($auto) {
+            $x .= $this->para($this->run('Conflitti tra fonti risolti con regola contabile', ['b' => true, 'color' => self::GRAY]), ['keep' => true, 'spacing' => [240, 80]]);
+            foreach ($auto as $e) {
+                $scartati = implode(', ', array_map(fn($d) => IR_Format::value($d['value'], $e['unit']) . ' (' . $this->file_label($d['file_id']) . ($d['page'] ? ', pag. ' . $d['page'] : '') . ')', $e['auto']['discarded']));
+                $x .= $this->para($this->run($e['label'] . ' — ' . IR_Format::period_label($e['period']) . ': ', ['b' => true]) . $this->run(IR_Format::value($e['value'], $e['unit']) . '. ' . $e['auto']['note'] . ' Valori scartati: ' . $scartati . '.'), ['style' => 'IrSmall']);
+            }
+        }
+
+        $x .= $this->h1('Avvisi di controllo sul testo');
+        $any = false;
+        foreach ($m['sections'] as $s) {
+            if ($s['warnings']) {
+                $any = true;
+                $x .= $this->para($this->run($s['title'], ['b' => true, 'color' => self::GRAY]), ['keep' => true, 'spacing' => [200, 40]]);
+                foreach ($s['warnings'] as $w) {
+                    $x .= $this->para($this->run($w), ['style' => 'IrSmall', 'num' => 1]);
+                }
+            }
+        }
+        if (!$any) {
+            $x .= $this->para($this->run('Nessun avviso.'));
+        }
 
         $x .= $this->appendix_calc($refs);
         $x .= $this->appendix_data($refs);
         $x .= $this->appendix_cites();
-
-        $sect = '<w:sectPr><w:headerReference w:type="default" r:id="rIdH1"/><w:footerReference w:type="default" r:id="rIdF1"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="567" w:footer="567" w:gutter="0"/></w:sectPr>';
-        return $x . $sect;
+        return $x . self::SECT;
     }
 
     private function input_value(array $in): string
@@ -490,6 +572,9 @@ final class IR_Docx
                     if ($e['confirmations'] > 1) {
                         $extra .= ' — confermato da ' . $e['confirmations'] . ' fonti concordi';
                     }
+                    if ($e['status'] === 'auto') {
+                        $extra .= ' — conflitto tra fonti risolto con regola contabile: ' . rtrim($e['auto']['note'], '.');
+                    }
                     if ($e['status'] === 'chosen') {
                         $extra .= ' — scelto dal consulente tra fonti discordanti';
                     }
@@ -522,14 +607,16 @@ final class IR_Docx
             return '';
         }
         $x = $this->h1('Appendice C — Citazioni documentali');
-        $x .= $this->para($this->run('Passaggi dei documenti a supporto delle affermazioni qualitative, numerati come nel testo.'));
+        $x .= $this->para($this->run('Passaggi dei documenti aziendali a supporto delle affermazioni qualitative di ciascun capitolo, nell\'ordine in cui compaiono nel testo.'));
         foreach ($this->cites as $n => $c) {
             $src = match ($c['src']['kind'] ?? '') {
                 'file' => $this->file_label($c['src']['file_id']),
                 'interview' => 'Note dell\'intervista al management',
-                'norm' => 'Riferimento normativo interno (aggiornato a maggio 2026)',
-                default => $c['title'],
+                default => 'Documento',
             };
+            if (!empty($c['section'])) {
+                $src = $c['section'] . ' — ' . $src;
+            }
             $pg = $c['page_start'] ? ' — pag. ' . $c['page_start'] . (($c['page_end'] && $c['page_end'] != $c['page_start']) ? '-' . $c['page_end'] : '') : '';
             $head = $this->run('[' . $n . '] ', ['b' => true, 'color' => self::BLUE]) . $this->run($src . $pg, ['b' => true]);
             $x .= $this->para($this->bookmark('ir_c' . $n, $head), ['style' => 'IrSmall', 'keep' => true]);
@@ -543,7 +630,7 @@ final class IR_Docx
     private function header(): string
     {
         $m = $this->model['meta'];
-        $p = $this->para($this->run('REPORT DI CONSULENZA  •  ' . ($m['ragione_sociale'] ?: '') . '  •  ' . $m['periodo'], ['color' => self::GRAY, 'sz' => 16]), ['jc' => 'right', 'border' => true]);
+        $p = $this->para($this->run(($this->audit() ? 'FASCICOLO DI AUDIT INTERNO — USO ESCLUSIVO DELLO STUDIO' : 'REPORT DI CONSULENZA') . '  •  ' . ($m['ragione_sociale'] ?: '') . '  •  ' . $m['periodo'], ['color' => self::GRAY, 'sz' => 16]), ['jc' => 'right', 'border' => true]);
         return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' . $p . '</w:hdr>';
     }
 
@@ -590,7 +677,7 @@ final class IR_Docx
 
     private function core(): string
     {
-        $t = self::x('Report di Consulenza — ' . ($this->state['profile']['ragione_sociale'] ?? ''));
+        $t = self::x(($this->audit() ? 'Fascicolo di audit interno — ' : 'Report di Consulenza — ') . ($this->state['profile']['ragione_sociale'] ?? ''));
         $now = gmdate('Y-m-d\TH:i:s\Z');
         return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
             . "<dc:title>$t</dc:title><dc:creator>" . self::x((string) get_option('ir_studio', 'Integra')) . '</dc:creator>'

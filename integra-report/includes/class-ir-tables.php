@@ -138,19 +138,16 @@ final class IR_Tables
     {
         $fields = IR_Catalog::info_fields();
         $rows = [];
-        $seen = [];
-        foreach ($this->state['extraction']['info'] ?? [] as $i) {
-            if (!in_array($i['field'], ['ragione_sociale', 'forma_giuridica', 'codice_fiscale', 'partita_iva', 'rea', 'pec', 'sede_legale', 'sedi_operative', 'data_costituzione', 'stato_attivita', 'ateco', 'capitale_sociale', 'addetti', 'organo_controllo', 'durc'], true)) {
-                continue;
+        $wanted = ['ragione_sociale', 'forma_giuridica', 'codice_fiscale', 'partita_iva', 'rea', 'pec', 'sede_legale', 'sedi_operative', 'data_costituzione', 'stato_attivita', 'ateco', 'capitale_sociale', 'addetti', 'organo_controllo', 'durc'];
+        $infos = IR_Context::infos($this->state); // per i campi univoci resta solo il dato più recente
+        foreach ($wanted as $field) {
+            foreach ($infos as $i) {
+                if ($i['field'] === $field) {
+                    $rows[] = ['label' => $fields[$field] ?? $field, 'cells' => [['v' => $i['value'], 'ref' => 'I:' . $i['id'], 'level' => null]]];
+                }
             }
-            $k = $i['field'] . '|' . mb_strtolower(trim($i['value']));
-            if (isset($seen[$k])) {
-                continue;
-            }
-            $seen[$k] = true;
-            $rows[] = ['label' => $fields[$i['field']] ?? $i['field'], 'cells' => [['v' => $i['value'], 'ref' => 'I:' . $i['id'], 'level' => null]]];
         }
-        return ['title' => 'Anagrafica societaria', 'columns' => ['Elemento', 'Dato (con fonte)'], 'rows' => $rows, 'notes' => ['Dati riportati dai documenti indicati in fonte, senza rielaborazioni.']];
+        return ['title' => 'Anagrafica societaria', 'columns' => ['Elemento', 'Dato (con fonte)'], 'rows' => $rows, 'notes' => ['Dati tratti dalla documentazione societaria esaminata; per le informazioni disponibili a più date è riportata la più recente.']];
     }
 
     private function t_concentrazione(): ?array
@@ -179,7 +176,7 @@ final class IR_Tables
     private function t_sp_funzionale(): ?array
     {
         return $this->std('Stato Patrimoniale riclassificato — schema funzionale (sintesi)', [
-            'CCN_COMM' => [], 'IMM_NETTE' => [], 'CIN' => [null, 'total' => true], 'PN' => [], 'PFN' => [],
+            'CCN_COMM' => [], 'IMM_NETTE' => [], 'ALTRE_NETTE' => [], 'CIN' => [null, 'total' => true], 'PN' => [], 'PFN' => [], 'FONTI_FIN' => [null, 'total' => true],
         ]);
     }
 
@@ -215,7 +212,7 @@ final class IR_Tables
 
     private function t_indici_liquidita(): ?array
     {
-        return $this->std('Indici di liquidità e del circolante', ['CR' => [], 'QR' => [], 'CASH_R' => [], 'CCN' => [], 'CCN_RICAVI' => [], 'DSO' => [], 'DPO' => [], 'DIO' => [], 'CCC' => []]);
+        return $this->std('Indici di liquidità e del circolante', ['CR' => [], 'QR' => [], 'CASH_R' => [], 'CCN' => [], 'CCN_RICAVI' => [], 'DSO' => [], 'DPO' => [], 'DPO_TOT' => [], 'DIO' => [], 'CCC' => []]);
     }
 
     private function t_indici_solidita(): ?array
@@ -255,7 +252,7 @@ final class IR_Tables
         $mk('PFN_EBITDA', '< ' . IR_Format::num($b['pfn_ebitda_max'], 1) . 'x', fn($v) => $v < $b['pfn_ebitda_max']);
         $mk('DSO', $b['dso'][0] . '-' . $b['dso'][1] . ' gg', fn($v) => $v <= $b['dso'][1]);
         $mk('AUTONOMIA', '> ' . $b['autonomia_min'] . '%', fn($v) => $v > $b['autonomia_min']);
-        return ['title' => 'Confronto con i benchmark di settore — ' . $b['label'] . ' (esercizio ' . $p . ')', 'columns' => ['Indicatore', 'Valore azienda', 'Benchmark', 'Esito'], 'rows' => $rows, 'notes' => [$P['benchmark_fonte']]];
+        return ['title' => 'Confronto con i benchmark di settore — ' . $b['label'] . ' (esercizio ' . $p . ')', 'columns' => ['Indicatore', 'Valore azienda', 'Benchmark', 'Esito'], 'rows' => $rows, 'notes' => array_values(array_filter([$P['benchmark_fonte'], IR_Context::benchmark_note($this->state)]))];
     }
 
     private function t_rendiconto(): ?array
@@ -311,7 +308,7 @@ final class IR_Tables
 
     private function t_ccc(): ?array
     {
-        return $this->std('Ciclo di conversione di cassa', ['DSO' => [], 'DIO' => [], 'DPO' => [], 'CCC' => [null, 'total' => true]]);
+        return $this->std('Ciclo di conversione di cassa', ['DSO' => [], 'DIO' => [], 'DPO' => [], 'DPO_TOT' => [], 'CCC' => [null, 'total' => true]]);
     }
 
     private function t_aging(): ?array

@@ -165,7 +165,11 @@ final class IR_Calculator
         }
         $tol = 2.0 * max($this->scale_of($a['ref']), $this->scale_of($b['ref']));
         $diff = $a['value'] - $b['value'];
-        $this->checks[] = ['id' => "$id@$p", 'label' => $label, 'period' => $p, 'a' => $a, 'b' => $b, 'diff' => $diff, 'ok' => abs($diff) <= $tol, 'tol' => $tol, 'note' => $note];
+        $ok = abs($diff) <= $tol;
+        if (!$ok && preg_match('/^\d{4}/', $p)) {
+            $note = trim($note . ' ' . $this->diagnose($id, $p, $diff));
+        }
+        $this->checks[] = ['id' => "$id@$p", 'label' => $label, 'period' => $p, 'a' => $a, 'b' => $b, 'diff' => $diff, 'ok' => $ok, 'tol' => $tol, 'note' => $note];
     }
 
     private function scale_of(?string $ref): float
@@ -224,32 +228,98 @@ final class IR_Calculator
         ];
     }
 
+    /**
+     * Quote entro/oltre l'esercizio successivo di crediti (C.II) o debiti (D).
+     * La quota oltre si legge dal prospetto (riga aggregata negli schemi abbreviati, somma delle
+     * righe delle singole voci negli schemi ordinari); la quota entro è sempre la differenza con il
+     * totale di Stato Patrimoniale, così la somma delle due coincide con il totale di bilancio.
+     */
+    private function maturity(string $p, string $key, string $nome, string $tot, string $entro, string $oltre, string $sigla, array $voci, string $notaEntro): void
+    {
+        $d = fn($c) => $this->d($c, $p);
+        $lblE = "$nome esigibili entro l'esercizio successivo";
+        $lblO = "$nome esigibili oltre l'esercizio successivo";
+        // la riga aggregata vale se letta dal prospetto (o da estrazioni precedenti prive dell'indicazione di origine);
+        // se proviene dalla Nota Integrativa prevalgono le righe delle singole voci del prospetto
+        $aggProspetto = $this->has($oltre, $p) && ($this->data["$oltre@$p"]['source']['origine'] ?? 'prospetto') !== 'nota_integrativa';
+        $perVoce = array_filter($voci, fn($sym, $code) => $this->has($code, $p), ARRAY_FILTER_USE_BOTH);
+
+        if (!$aggProspetto && $perVoce) {
+            $in = [];
+            foreach ($perVoce as $code => $sym) {
+                $in[$sym] = $d($code);
+            }
+            $this->n("{$key}_OLTRE", $p, $lblO, 'eur', 'Somma delle righe "esigibili oltre l\'esercizio successivo" delle voci di ' . $sigla . ' (prospetto di Stato Patrimoniale)', $in, fn($v) => array_sum($v),
+                ['note' => 'Le voci di ' . $sigla . ' senza riga "oltre" nel prospetto sono a zero per omissione (art. 2423-ter c.c.).']);
+        } elseif ($this->has($oltre, $p)) {
+            $this->n("{$key}_OLTRE", $p, $lblO, 'eur', "$sigla oltre (dato di bilancio)", ["$sigla oltre" => $d($oltre)], fn($v) => $v["$sigla oltre"]);
+        } elseif ($this->has($tot, $p) && $this->has($entro, $p)) {
+            $this->n("{$key}_OLTRE", $p, $lblO, 'eur', "$sigla totale − $sigla entro", ["$sigla totale" => $d($tot), "$sigla entro" => $d($entro)], fn($v) => $v["$sigla totale"] - $v["$sigla entro"]);
+        } else {
+            $this->n("{$key}_OLTRE", $p, $lblO, 'eur', "$sigla oltre (dato di bilancio)", ["$sigla oltre" => $d($oltre)], fn($v) => $v["$sigla oltre"]);
+        }
+
+        if ($this->has($tot, $p)) {
+            $this->n("{$key}_ENTRO", $p, $lblE, 'eur', "$sigla totale (Stato Patrimoniale) − $nome oltre l'esercizio successivo",
+                ["$sigla totale" => $d($tot), "$nome oltre" => $this->k("{$key}_OLTRE", $p)], fn($v) => $v["$sigla totale"] - $v["$nome oltre"],
+                ['note' => trim('Calcolata per differenza dal totale di Stato Patrimoniale, così che entro + oltre coincida con il totale di bilancio. ' . $notaEntro)]);
+        } else {
+            $this->n("{$key}_ENTRO", $p, $lblE, 'eur', "$sigla entro (dato di bilancio)", ["$sigla entro" => $d($entro)], fn($v) => $v["$sigla entro"]);
+        }
+    }
+
+    /** Indizio deterministico sulla causa di una quadratura fallita: nessun valore viene modificato. */
+    private function diagnose(string $id, string $p, float $diff): string
+    {
+        $hints = [];
+        $tol = 2.0;
+        // la differenza viene confrontata solo con le voci del lato interessato dal controllo
+        $side = ['Q_ATT' => '/^SP_(A|BI|BII|BIII|CI|CII.*|CIII|CIV|D_ATT)$/', 'Q_PASS' => '/^SP_(PN.*|B_FONDI|C_TFR|D\d.*|D_TOT|D_ENTRO|D_OLTRE|E_PASS)$/'][$id] ?? null;
+        foreach ($side ? $this->data : [] as $e) {
+            if ($e['period'] !== $p || $e['value'] === null || abs($e['value']) < 1 || !preg_match($side, $e['code'])) {
+                continue;
+            }
+            if (abs(abs($e['value']) - abs($diff)) <= $tol) {
+                $hints[] = 'la differenza coincide con la voce «' . $e['label'] . '»';
+            }
+        }
+        $legacy = false;
+        $auto = false;
+        foreach ($this->data as $e) {
+            if ($e['period'] !== $p) {
+                continue;
+            }
+            if (in_array($e['code'], ['SP_CII_ENTRO', 'SP_CII_OLTRE', 'SP_D_ENTRO', 'SP_D_OLTRE'], true) && $e['value'] !== null && ($e['source']['origine'] ?? '') !== 'prospetto') {
+                $legacy = true;
+            }
+            if ($e['status'] === 'auto' && str_contains($e['auto']['rule'] ?? '', 'riesposto')) {
+                $auto = true;
+            }
+        }
+        if (!$side) {
+            return '';
+        }
+        if ($legacy) {
+            $hints[] = 'le quote entro/oltre di crediti o debiti non provengono dal prospetto di Stato Patrimoniale: ripeti l\'estrazione del bilancio per acquisire le righe "esigibili oltre" delle singole voci';
+        }
+        if ($auto) {
+            $hints[] = 'per questo esercizio sono in uso saldi riesposti dal bilancio successivo: verifica che tutte le voci provengano dallo stesso bilancio';
+        }
+        return $hints ? 'Possibile causa: ' . implode('; ', array_slice(array_values(array_unique($hints)), 0, 4)) . '.' : '';
+    }
+
     private function core(string $p): void
     {
         $d = fn($c) => $this->d($c, $p);
         $k = fn($c) => $this->k($c, $p);
 
-        // --- derivazioni di supporto (usate solo se il dato diretto manca)
-        if ($this->has('SP_CII_ENTRO', $p) || !$this->has('SP_CII_TOT', $p)) {
-            $this->n('CRED_ENTRO', $p, 'Crediti esigibili entro l\'esercizio successivo', 'eur', 'C.II entro (dato di bilancio)', ['C.II entro' => $d('SP_CII_ENTRO')], fn($v) => $v['C.II entro']);
-        } else {
-            $this->n('CRED_ENTRO', $p, 'Crediti esigibili entro l\'esercizio successivo', 'eur', 'C.II totale − C.II oltre', ['C.II totale' => $d('SP_CII_TOT'), 'C.II oltre' => $d('SP_CII_OLTRE')], fn($v) => $v['C.II totale'] - $v['C.II oltre']);
-        }
-        if ($this->has('SP_CII_OLTRE', $p) || !$this->has('SP_CII_TOT', $p)) {
-            $this->n('CRED_OLTRE', $p, 'Crediti esigibili oltre l\'esercizio successivo', 'eur', 'C.II oltre (dato di bilancio)', ['C.II oltre' => $d('SP_CII_OLTRE')], fn($v) => $v['C.II oltre']);
-        } else {
-            $this->n('CRED_OLTRE', $p, 'Crediti esigibili oltre l\'esercizio successivo', 'eur', 'C.II totale − C.II entro', ['C.II totale' => $d('SP_CII_TOT'), 'C.II entro' => $d('SP_CII_ENTRO')], fn($v) => $v['C.II totale'] - $v['C.II entro']);
-        }
-        if ($this->has('SP_D_ENTRO', $p) || !$this->has('SP_D_TOT', $p)) {
-            $this->n('DEB_ENTRO', $p, 'Debiti esigibili entro l\'esercizio successivo', 'eur', 'D entro (dato di bilancio)', ['D entro' => $d('SP_D_ENTRO')], fn($v) => $v['D entro']);
-        } else {
-            $this->n('DEB_ENTRO', $p, 'Debiti esigibili entro l\'esercizio successivo', 'eur', 'D totale − D oltre', ['D totale' => $d('SP_D_TOT'), 'D oltre' => $d('SP_D_OLTRE')], fn($v) => $v['D totale'] - $v['D oltre']);
-        }
-        if ($this->has('SP_D_OLTRE', $p) || !$this->has('SP_D_TOT', $p)) {
-            $this->n('DEB_OLTRE', $p, 'Debiti esigibili oltre l\'esercizio successivo', 'eur', 'D oltre (dato di bilancio)', ['D oltre' => $d('SP_D_OLTRE')], fn($v) => $v['D oltre']);
-        } else {
-            $this->n('DEB_OLTRE', $p, 'Debiti esigibili oltre l\'esercizio successivo', 'eur', 'D totale − D entro', ['D totale' => $d('SP_D_TOT'), 'D entro' => $d('SP_D_ENTRO')], fn($v) => $v['D totale'] - $v['D entro']);
-        }
+        // --- scadenza di crediti e debiti: il totale è sempre quello del prospetto di Stato Patrimoniale
+        $this->maturity($p, 'CRED', 'Crediti', 'SP_CII_TOT', 'SP_CII_ENTRO', 'SP_CII_OLTRE', 'C.II',
+            array_combine(array_map(static fn($k) => "SP_CII_OLTRE_$k", array_keys(IR_Catalog::CREDITI_VOCI)), array_map(static fn($k) => 'C.II.' . strtolower(str_replace(['BIS', 'TER', 'QUATER'], ['-bis', '-ter', '-quater'], $k)) . ' oltre', array_keys(IR_Catalog::CREDITI_VOCI))),
+            'Le voci che il prospetto non ripartisce per scadenza (es. C.II.5-ter Imposte anticipate) restano, per differenza, nella quota entro l\'esercizio successivo.');
+        $this->maturity($p, 'DEB', 'Debiti', 'SP_D_TOT', 'SP_D_ENTRO', 'SP_D_OLTRE', 'D',
+            array_combine(array_map(static fn($k) => "SP_D{$k}_OLTRE", array_keys(IR_Catalog::DEBITI_VOCI)), array_map(static fn($k) => 'D.' . strtolower(str_replace('BIS', '-bis', $k)) . ' oltre', array_keys(IR_Catalog::DEBITI_VOCI))),
+            '');
         foreach (['D4' => 'Debiti verso banche', 'D5' => 'Debiti verso altri finanziatori'] as $c => $lbl) {
             if ($this->has("SP_$c", $p)) {
                 $this->n("{$c}_TOT", $p, "$lbl (totale)", 'eur', "$c (dato di bilancio)", [$c => $d("SP_$c")], fn($v) => $v[$c]);
@@ -295,9 +365,33 @@ final class IR_Calculator
         $this->n('PFN', $p, 'Posizione finanziaria netta', 'eur', 'Debiti finanziari lordi − Liquidità e attività finanziarie a breve', ['Debiti finanziari' => $k('DEBFIN'), 'Liquidità' => $k('LIQFIN')], fn($v) => $v['Debiti finanziari'] - $v['Liquidità'],
             ['note' => 'Valore positivo = indebitamento netto; negativo = cassa netta.']);
         $this->n('CIN', $p, 'Capitale investito netto', 'eur', 'PN + PFN', ['PN' => $k('PN'), 'PFN' => $k('PFN')], fn($v) => $v['PN'] + $v['PFN']);
-        $this->n('CCN_COMM', $p, 'Capitale circolante commerciale', 'eur', 'C.I Rimanenze + C.II.1 Crediti verso clienti − D.7 Debiti verso fornitori',
-            ['C.I' => $d('SP_CI'), 'C.II.1' => $d('SP_CII_CLIENTI'), 'D.7' => $d('SP_D7')], fn($v) => $v['C.I'] + $v['C.II.1'] - $v['D.7']);
+        // debiti verso imprese del gruppo (D.9, D.10, D.11, D.11-bis): natura commerciale indicata dal consulente
+        $gruppo = array_filter(IR_Catalog::DEBITI_GRUPPO, fn($sym, $code) => $this->has($code, $p), ARRAY_FILTER_USE_BOTH);
+        $gruppoComm = !empty($this->rp['infragruppo_commerciali']);
+        if ($gruppo) {
+            $in = [];
+            foreach ($gruppo as $code => $sym) {
+                $in[$sym] = $d($code);
+            }
+            $this->n('DEB_GRUPPO', $p, 'Debiti verso imprese del gruppo', 'eur', $this->sum_formula(array_keys($in)), $in, fn($v) => array_sum($v),
+                ['note' => 'Controllate, collegate, controllanti e imprese sottoposte al controllo delle controllanti.']);
+        }
+        $conGruppo = $gruppo && $gruppoComm;
+        if ($conGruppo) {
+            $this->n('CCN_COMM', $p, 'Capitale circolante commerciale', 'eur', 'C.I Rimanenze + C.II.1 Crediti verso clienti − D.7 Debiti verso fornitori − Debiti commerciali verso imprese del gruppo',
+                ['C.I' => $d('SP_CI'), 'C.II.1' => $d('SP_CII_CLIENTI'), 'D.7' => $d('SP_D7'), 'Debiti gruppo' => $k('DEB_GRUPPO')], fn($v) => $v['C.I'] + $v['C.II.1'] - $v['D.7'] - $v['Debiti gruppo'],
+                ['note' => 'I debiti verso imprese del gruppo sono inclusi perché indicati dal consulente come debiti di natura commerciale.']);
+        } else {
+            $this->n('CCN_COMM', $p, 'Capitale circolante commerciale', 'eur', 'C.I Rimanenze + C.II.1 Crediti verso clienti − D.7 Debiti verso fornitori',
+                ['C.I' => $d('SP_CI'), 'C.II.1' => $d('SP_CII_CLIENTI'), 'D.7' => $d('SP_D7')], fn($v) => $v['C.I'] + $v['C.II.1'] - $v['D.7'],
+                ['note' => $gruppo ? 'I debiti verso imprese del gruppo non sono inclusi: se hanno natura commerciale, indicarlo nei parametri di calcolo.' : '']);
+        }
         $this->n('IMM_NETTE', $p, 'Immobilizzazioni nette', 'eur', 'B.I + B.II + B.III', ['B.I' => $d('SP_BI'), 'B.II' => $d('SP_BII'), 'B.III' => $d('SP_BIII')], fn($v) => $v['B.I'] + $v['B.II'] + $v['B.III']);
+        $this->n('ALTRE_NETTE', $p, 'Altre attività / (passività) operative nette e fondi', 'eur', 'Capitale investito netto − Capitale circolante commerciale − Immobilizzazioni nette',
+            ['CIN' => $k('CIN'), 'CCN comm.' => $k('CCN_COMM'), 'Imm. nette' => $k('IMM_NETTE')], fn($v) => $v['CIN'] - $v['CCN comm.'] - $v['Imm. nette'],
+            ['note' => 'Voce di raccordo: altri crediti e debiti non finanziari, ratei e risconti, fondi per rischi e oneri e TFR. Valore negativo = passività nette.']);
+        $this->n('FONTI_FIN', $p, 'Totale fonti di finanziamento', 'eur', 'PN + PFN', ['PN' => $k('PN'), 'PFN' => $k('PFN')], fn($v) => $v['PN'] + $v['PFN'],
+            ['note' => 'Coincide con il capitale investito netto.']);
 
         // --- CE a valore aggiunto
         $this->n('RICAVI', $p, 'Ricavi delle vendite e delle prestazioni', 'eur', 'A.1', ['A.1' => $d('CE_A1')], fn($v) => $v['A.1']);
@@ -336,17 +430,23 @@ final class IR_Calculator
         $this->n('QR', $p, 'Quick ratio (acid test)', 'ratio', '(LI + LD) / Passivo corrente', ['LI' => $k('LI'), 'LD' => $k('LD'), 'PC' => $k('PC')], fn($v) => $v['PC'] != 0 ? ($v['LI'] + $v['LD']) / $v['PC'] : null, ['soglia' => 'QR']);
         $this->n('CASH_R', $p, 'Cash ratio', 'ratio', 'LI / Passivo corrente', ['LI' => $k('LI'), 'PC' => $k('PC')], fn($v) => $v['PC'] != 0 ? $v['LI'] / $v['PC'] : null, ['soglia' => 'CASH_RATIO']);
         $this->n('CCN', $p, 'Capitale circolante netto (finanziario)', 'eur', 'Attivo corrente − Passivo corrente', ['AC' => $k('AC'), 'PC' => $k('PC')], fn($v) => $v['AC'] - $v['PC'],
-            ['eval' => fn($x) => ['level' => $x >= 0 ? 'good' : 'bad', 'text' => $x >= 0 ? 'Positivo' : 'Negativo', 'soglia' => 'Positivo = equilibrio finanziario di breve', 'fonte' => 'formule_kpi.md §6']]);
+            ['eval' => fn($x) => ['level' => $x >= 0 ? 'good' : 'bad', 'text' => $x >= 0 ? 'Positivo' : 'Negativo', 'soglia' => 'Positivo = equilibrio finanziario di breve', 'fonte' => 'Prassi di analisi di bilancio']]);
         $this->n('CCN_RICAVI', $p, 'CCN / Ricavi', 'pct', 'CCN / Ricavi × 100', ['CCN' => $k('CCN'), 'Ricavi' => $k('RICAVI')], fn($v) => $v['Ricavi'] != 0 ? $v['CCN'] / $v['Ricavi'] * 100 : null);
         $this->n('DSO', $p, 'DSO — giorni medi di incasso', 'gg', 'C.II.1 Crediti verso clienti / Ricavi × 365', ['C.II.1' => $d('SP_CII_CLIENTI'), 'Ricavi' => $k('RICAVI')], fn($v) => $v['Ricavi'] > 0 ? $v['C.II.1'] / $v['Ricavi'] * 365 : ['nv' => 'ricavi non positivi'],
             ['soglia' => 'DSO', 'note' => 'I crediti includono l\'IVA mentre i ricavi ne sono al netto: il valore tende a sovrastimare i giorni effettivi.']);
         $this->n('ACQUISTI', $p, 'Acquisti di beni e servizi', 'eur', 'B.6 + B.7 + B.8', ['B.6' => $d('CE_B6'), 'B.7' => $d('CE_B7'), 'B.8' => $d('CE_B8')], fn($v) => array_sum($v));
-        $this->n('DPO', $p, 'DPO — giorni medi di pagamento', 'gg', 'D.7 Debiti verso fornitori / Acquisti × 365', ['D.7' => $d('SP_D7'), 'Acquisti' => $k('ACQUISTI')], fn($v) => $v['Acquisti'] > 0 ? $v['D.7'] / $v['Acquisti'] * 365 : ['nv' => 'acquisti non positivi'],
-            ['note' => 'Riferimento fisiologico in Italia: 60-90 giorni (formule_kpi.md §6).']);
+        $this->n('DPO', $p, $gruppo ? 'DPO — giorni medi di pagamento (fornitori terzi)' : 'DPO — giorni medi di pagamento', 'gg', 'D.7 Debiti verso fornitori / Acquisti × 365', ['D.7' => $d('SP_D7'), 'Acquisti' => $k('ACQUISTI')], fn($v) => $v['Acquisti'] > 0 ? $v['D.7'] / $v['Acquisti'] * 365 : ['nv' => 'acquisti non positivi'],
+            ['note' => 'Riferimento fisiologico in Italia: 60-90 giorni.' . ($gruppo ? ' Non comprende i debiti verso imprese del gruppo.' : '')]);
+        if ($gruppo) {
+            $this->n('DPO_TOT', $p, 'DPO complessivo (inclusi debiti verso imprese del gruppo)', 'gg', '(D.7 Debiti verso fornitori + Debiti verso imprese del gruppo) / Acquisti × 365',
+                ['D.7' => $d('SP_D7'), 'Debiti gruppo' => $k('DEB_GRUPPO'), 'Acquisti' => $k('ACQUISTI')], fn($v) => $v['Acquisti'] > 0 ? ($v['D.7'] + $v['Debiti gruppo']) / $v['Acquisti'] * 365 : ['nv' => 'acquisti non positivi'],
+                ['note' => 'Significativo solo se i debiti verso imprese del gruppo derivano da forniture di beni o servizi: la natura va verificata in Nota Integrativa.']);
+        }
         $this->n('CONSUMI', $p, 'Consumi di materie e merci', 'eur', 'B.6 + B.11', ['B.6' => $d('CE_B6'), 'B.11' => $d('CE_B11')], fn($v) => $v['B.6'] + $v['B.11']);
         $this->n('DIO', $p, 'DIO — giorni medi di giacenza', 'gg', 'C.I Rimanenze / Consumi × 365', ['C.I' => $d('SP_CI'), 'Consumi' => $k('CONSUMI')], fn($v) => $v['Consumi'] > 0 ? $v['C.I'] / $v['Consumi'] * 365 : ['nv' => 'consumi non positivi'],
             ['note' => 'Indicatore dipendente dal settore: nessuna soglia generale.']);
-        $this->n('CCC', $p, 'Cash conversion cycle', 'gg', 'DSO + DIO − DPO', ['DSO' => $k('DSO'), 'DIO' => $k('DIO'), 'DPO' => $k('DPO')], fn($v) => $v['DSO'] + $v['DIO'] - $v['DPO'], ['soglia' => 'CCC']);
+        $this->n('CCC', $p, 'Cash conversion cycle', 'gg', $conGruppo ? 'DSO + DIO − DPO complessivo' : 'DSO + DIO − DPO', ['DSO' => $k('DSO'), 'DIO' => $k('DIO'), 'DPO' => $k($conGruppo ? 'DPO_TOT' : 'DPO')], fn($v) => $v['DSO'] + $v['DIO'] - $v['DPO'],
+            ['soglia' => 'CCC', 'note' => $conGruppo ? 'Calcolato con il DPO complessivo: i debiti verso imprese del gruppo sono indicati dal consulente come commerciali.' : ($gruppo ? 'Calcolato con il DPO verso fornitori terzi.' : '')]);
 
         // --- solidità
         $this->n('AUTONOMIA', $p, 'Indice di autonomia finanziaria', 'pct', 'PN / Attivo totale × 100', ['PN' => $k('PN'), 'AT' => $k('AT')], fn($v) => $v['AT'] != 0 ? $v['PN'] / $v['AT'] * 100 : null, ['soglia' => 'AUTONOMIA']);
@@ -388,7 +488,7 @@ final class IR_Calculator
         $this->n('ROD', $p, 'ROD — Costo medio del debito', 'pct', 'Oneri finanziari netti / PFN media × 100', ['OF netti' => $k('OF_NETTI'), 'PFN media' => $k('PFN_MEDIA')], fn($v) => $v['PFN media'] > 0 ? $v['OF netti'] / $v['PFN media'] * 100 : ['nv' => 'PFN media non positiva (cassa netta): indicatore non significativo'],
             ['note' => 'Confronto con il ROI: se ROD > ROI la leva finanziaria è sfavorevole.']);
         $this->n('LEVA', $p, 'Effetto leva finanziaria', 'pct', '(ROI − ROD) × PFN / PN', ['ROI' => $k('ROI'), 'ROD' => $k('ROD'), 'PFN' => $k('PFN'), 'PN' => $k('PN')], fn($v) => $v['PN'] > 0 ? ($v['ROI'] - $v['ROD']) * $v['PFN'] / $v['PN'] : ['nv' => 'patrimonio netto non positivo'],
-            ['eval' => fn($x) => ['level' => $x >= 0 ? 'good' : 'bad', 'text' => $x >= 0 ? 'Leva favorevole' : 'Leva sfavorevole', 'soglia' => 'Positivo = leva favorevole', 'fonte' => 'formule_kpi.md §5']]);
+            ['eval' => fn($x) => ['level' => $x >= 0 ? 'good' : 'bad', 'text' => $x >= 0 ? 'Leva favorevole' : 'Leva sfavorevole', 'soglia' => 'Positivo = leva favorevole', 'fonte' => 'Prassi di analisi di bilancio']]);
 
         $prev = $this->prev($p);
         if ($prev !== null) {
@@ -484,7 +584,7 @@ final class IR_Calculator
         $k = fn($c) => $this->k($c, $p);
         $this->n('ETR', $p, 'Aliquota fiscale effettiva (ETR)', 'pct', 'Imposte (voce 20) / Risultato prima delle imposte × 100', ['Imposte' => $k('IMPOSTE'), 'EBT' => $k('EBT')],
             fn($v) => $v['EBT'] > 0 ? $v['Imposte'] / $v['EBT'] * 100 : ['nv' => 'risultato ante imposte non positivo: aliquota non significativa'],
-            ['eval' => fn($x) => ['level' => ($x > 35 || $x < 20) ? 'warn' : 'good', 'text' => $x > 35 ? 'Superiore al 35%: da approfondire' : ($x < 20 ? 'Inferiore al 20%: da approfondire' : 'In linea con le aliquote nominali'), 'soglia' => 'Range di normalità 20-35% (24% IRES + IRAP)', 'fonte' => 'formule_kpi.md §13']]);
+            ['eval' => fn($x) => ['level' => ($x > 35 || $x < 20) ? 'warn' : 'good', 'text' => $x > 35 ? 'Superiore al 35%: da approfondire' : ($x < 20 ? 'Inferiore al 20%: da approfondire' : 'In linea con le aliquote nominali'), 'soglia' => 'Range di normalità 20-35% (24% IRES + IRAP)', 'fonte' => 'Prassi di analisi di bilancio']]);
         foreach (['FISC_IRES' => 'IRES dovuta', 'FISC_IRAP' => 'IRAP dovuta'] as $c => $l) {
             if ($this->has($c, $p)) {
                 $this->n($c, $p, $l, 'eur', "$l (dichiarazione)", [$l => $this->d($c, $p)], fn($v) => $v[$l]);
@@ -673,7 +773,7 @@ final class IR_Calculator
             $this->n('DSCR2', 'prosp', 'DSCR a 12 mesi — approccio 2', 'ratio', '(Cassa iniziale + Flussi operativi netti previsti) / Servizio del debito',
                 ['Cassa iniziale' => $this->d('PROSP_CASSA_INIZIALE', $pcash), 'Flussi netti' => $this->d('PROSP_FLUSSI_OPERATIVI_12M', $pflow), 'Servizio debito' => $this->k('SERV_DEBITO', 'prosp')],
                 fn($v) => $v['Servizio debito'] > 0 ? ($v['Cassa iniziale'] + $v['Flussi netti']) / $v['Servizio debito'] : null,
-                ['eval' => fn($x) => ['level' => $x >= 1 ? 'good' : 'bad', 'text' => $x >= 1 ? 'Copertura sufficiente' : 'Segnale di allarme', 'soglia' => 'Critico se < 1,0', 'fonte' => 'formule_kpi.md §9 (approccio 2)']]);
+                ['eval' => fn($x) => ['level' => $x >= 1 ? 'good' : 'bad', 'text' => $x >= 1 ? 'Copertura sufficiente' : 'Segnale di allarme', 'soglia' => 'Critico se < 1,0', 'fonte' => 'Prassi di analisi di bilancio (approccio 2)']]);
         }
 
         // stress test

@@ -17,38 +17,38 @@ final class IR_Params
     public static function defaults(): array
     {
         return [
-            'versione' => 'Parametri di default — skill report-consulenza-pmi-sicilia v2.0.0 (riferimenti normativi aggiornati a maggio 2026)',
+            'versione' => 'Parametri di default v2.0.0 (riferimenti normativi aggiornati a maggio 2026)',
 
             // Soglie di valutazione (verde / giallo / rosso). dir: 'high' = più alto è meglio, 'low' = più basso è meglio.
             'soglie' => [
-                'PFN_EBITDA' => ['dir' => 'low', 'good' => 3.0, 'bad' => 5.0, 'fonte' => 'Prassi bancaria PMI (formule_kpi.md §4)'],
-                'PFN_PN' => ['dir' => 'low', 'good' => 1.0, 'bad' => 2.0, 'fonte' => 'formule_kpi.md §4'],
-                'LEVERAGE' => ['dir' => 'low', 'good' => 2.0, 'bad' => 3.0, 'fonte' => 'formule_kpi.md §4'],
-                'COPERTURA_OF' => ['dir' => 'high', 'good' => 5.0, 'bad' => 2.0, 'fonte' => 'formule_kpi.md §4'],
-                'OF_RICAVI' => ['dir' => 'low', 'good' => 1.5, 'bad' => 3.8, 'fonte' => 'Studio Di Crosta (formule_kpi.md §4)'],
-                'ROE' => ['dir' => 'high', 'good' => 8.0, 'bad' => 0.0, 'fonte' => 'formule_kpi.md §5'],
-                'ROI' => ['dir' => 'high', 'good' => 6.0, 'bad' => 3.0, 'fonte' => 'formule_kpi.md §5 (buono > 6-8% per PMI; soglia inferiore di prassi)'],
-                'ROS' => ['dir' => 'high', 'good' => 5.0, 'bad' => 3.0, 'fonte' => 'formule_kpi.md §5 (3-5% normale)'],
-                'ROA' => ['dir' => 'high', 'good' => 5.0, 'bad' => 2.0, 'fonte' => 'formule_kpi.md §5'],
-                'NET_MARGIN' => ['dir' => 'high', 'good' => 5.0, 'bad' => 0.0, 'fonte' => 'formule_kpi.md §5'],
-                'CR' => ['dir' => 'high', 'good' => 1.5, 'bad' => 1.0, 'fonte' => 'formule_kpi.md §6'],
-                'QR' => ['dir' => 'high', 'good' => 1.0, 'bad' => 0.8, 'fonte' => 'formule_kpi.md §6'],
-                'CASH_RATIO' => ['dir' => 'high', 'good' => 0.2, 'bad' => 0.1, 'fonte' => 'formule_kpi.md §6 (sano > 0,2)'],
-                'DSO' => ['dir' => 'low', 'good' => 60, 'bad' => 90, 'fonte' => 'formule_kpi.md §6 (B2B PMI Italia)'],
-                'CCC' => ['dir' => 'low', 'good' => 30, 'bad' => 90, 'fonte' => 'formule_kpi.md §6'],
-                'AUTONOMIA' => ['dir' => 'high', 'good' => 33.0, 'bad' => 20.0, 'fonte' => 'formule_kpi.md §7'],
-                'INDEBITAMENTO' => ['dir' => 'low', 'good' => 67.0, 'bad' => 80.0, 'fonte' => 'formule_kpi.md §7 (sano < 67%)'],
-                'PN_TERZI' => ['dir' => 'high', 'good' => 100.0, 'bad' => 50.0, 'fonte' => 'formule_kpi.md §7'],
-                'MS_PRIMARIO' => ['dir' => 'high', 'good' => 1.0, 'bad' => 0.7, 'fonte' => 'formule_kpi.md §7'],
-                'MS_SECONDARIO' => ['dir' => 'high', 'good' => 1.0, 'bad' => 0.9, 'fonte' => 'formule_kpi.md §7 (regola d\'oro > 1)'],
-                'DSCR' => ['dir' => 'high', 'good' => 1.1, 'bad' => 1.0, 'fonte' => 'Soglia di prassi adottata dal modello (formule_kpi.md §9): ≥ 1,1 adeguata; < 1,0 segnale di allarme'],
+                'PFN_EBITDA' => ['dir' => 'low', 'good' => 3.0, 'bad' => 5.0, 'fonte' => 'Prassi bancaria PMI'],
+                'PFN_PN' => ['dir' => 'low', 'good' => 1.0, 'bad' => 2.0, 'fonte' => 'Prassi di analisi di bilancio'],
+                'LEVERAGE' => ['dir' => 'low', 'good' => 2.0, 'bad' => 3.0, 'fonte' => 'Prassi di analisi di bilancio'],
+                'COPERTURA_OF' => ['dir' => 'high', 'good' => 5.0, 'bad' => 2.0, 'fonte' => 'Prassi di analisi di bilancio'],
+                'OF_RICAVI' => ['dir' => 'low', 'good' => 1.5, 'bad' => 3.8, 'fonte' => 'Studio Di Crosta'],
+                'ROE' => ['dir' => 'high', 'good' => 8.0, 'bad' => 0.0, 'fonte' => 'Prassi di analisi di bilancio'],
+                'ROI' => ['dir' => 'high', 'good' => 6.0, 'bad' => 3.0, 'fonte' => 'Prassi di analisi di bilancio (buono > 6-8% per PMI; soglia inferiore di prassi)'],
+                'ROS' => ['dir' => 'high', 'good' => 5.0, 'bad' => 3.0, 'fonte' => 'Prassi di analisi di bilancio (3-5% normale)'],
+                'ROA' => ['dir' => 'high', 'good' => 5.0, 'bad' => 2.0, 'fonte' => 'Prassi di analisi di bilancio'],
+                'NET_MARGIN' => ['dir' => 'high', 'good' => 5.0, 'bad' => 0.0, 'fonte' => 'Prassi di analisi di bilancio'],
+                'CR' => ['dir' => 'high', 'good' => 1.5, 'bad' => 1.0, 'fonte' => 'Prassi di analisi di bilancio'],
+                'QR' => ['dir' => 'high', 'good' => 1.0, 'bad' => 0.8, 'fonte' => 'Prassi di analisi di bilancio'],
+                'CASH_RATIO' => ['dir' => 'high', 'good' => 0.2, 'bad' => 0.1, 'fonte' => 'Prassi di analisi di bilancio (sano > 0,2)'],
+                'DSO' => ['dir' => 'low', 'good' => 60, 'bad' => 90, 'fonte' => 'Prassi di analisi di bilancio (B2B PMI Italia)'],
+                'CCC' => ['dir' => 'low', 'good' => 30, 'bad' => 90, 'fonte' => 'Prassi di analisi di bilancio'],
+                'AUTONOMIA' => ['dir' => 'high', 'good' => 33.0, 'bad' => 20.0, 'fonte' => 'Prassi di analisi di bilancio'],
+                'INDEBITAMENTO' => ['dir' => 'low', 'good' => 67.0, 'bad' => 80.0, 'fonte' => 'Prassi di analisi di bilancio (sano < 67%)'],
+                'PN_TERZI' => ['dir' => 'high', 'good' => 100.0, 'bad' => 50.0, 'fonte' => 'Prassi di analisi di bilancio'],
+                'MS_PRIMARIO' => ['dir' => 'high', 'good' => 1.0, 'bad' => 0.7, 'fonte' => 'Prassi di analisi di bilancio'],
+                'MS_SECONDARIO' => ['dir' => 'high', 'good' => 1.0, 'bad' => 0.9, 'fonte' => 'Prassi di analisi di bilancio (regola d\'oro > 1)'],
+                'DSCR' => ['dir' => 'high', 'good' => 1.1, 'bad' => 1.0, 'fonte' => 'Soglia di prassi adottata dal modello: ≥ 1,1 adeguata; < 1,0 segnale di allarme'],
                 'UTILIZZO_FIDI' => ['dir' => 'low', 'good' => 80.0, 'bad' => 100.0, 'fonte' => 'Prassi di analisi andamentale (utilizzo/accordato)'],
             ],
 
             'zscore' => [
                 'Z1' => ['nome' => "Z'-Score (Altman 1983, società non quotate manifatturiere)", 'coeff' => ['X1' => 0.717, 'X2' => 0.847, 'X3' => 3.107, 'X4' => 0.420, 'X5' => 0.998], 'safe' => 2.90, 'distress' => 1.23],
                 'Z2' => ['nome' => "Z''-Score (Altman, imprese non manifatturiere / servizi)", 'coeff' => ['X1' => 6.56, 'X2' => 3.26, 'X3' => 6.72, 'X4' => 1.05], 'safe' => 2.60, 'distress' => 1.10],
-                'fonte' => 'Altman E.I. (1968, 1983); formule_kpi.md §8',
+                'fonte' => 'Altman E.I. (1968, 1983)',
             ],
 
             // art. 3, comma 4, CCII e art. 25-novies, comma 1, CCII. Verificare sempre il testo vigente su Normattiva.
@@ -95,7 +95,7 @@ final class IR_Params
                 'agricoltura' => ['label' => 'Agricoltura / Pesca', 'ebitda_margin' => [5, 15], 'pfn_ebitda_max' => 4.0, 'dso' => [30, 90], 'autonomia_min' => 20, 'manifatturiero' => false],
                 'trasporti' => ['label' => 'Trasporti / Logistica', 'ebitda_margin' => [6, 12], 'pfn_ebitda_max' => 4.0, 'dso' => [60, 90], 'autonomia_min' => 20, 'manifatturiero' => false],
             ],
-            'benchmark_fonte' => 'Valori indicativi per PMI italiane (Banca d\'Italia, ABI, CERVED, Studio Di Crosta — formule_kpi.md §11). Per analisi puntuali consultare i parametri specifici per codice ATECO.',
+            'benchmark_fonte' => 'Valori indicativi per PMI italiane (Banca d\'Italia, ABI, CERVED, Studio Di Crosta). Per analisi puntuali consultare i parametri specifici per codice ATECO.',
 
             // Tabella rating (formule_kpi.md §12). Ogni banda: [limite inferiore escluso / superiore] in ordine AAA → C.
             'rating' => [
@@ -106,7 +106,7 @@ final class IR_Params
                 'ZSCORE_Z1' => ['dir' => 'high', 'limiti' => [4.0, 3.0, 2.5, 1.8, 1.5, 1.2, 1.0, 0.7]],
                 'DSCR' => ['dir' => 'high', 'limiti' => [2.0, 1.5, 1.2, 1.1, 1.0, 0.9, 0.7, 0.5]],
                 'AUTONOMIA' => ['dir' => 'high', 'limiti' => [50, 40, 30, 25, 20, 15, 10, 5]],
-                'fonte' => 'Modello di rating interno sintetico (formule_kpi.md §12): rating finale = mediana dei rating per KPI; -1 classe con segnali CCII attivi; -2 classi con PN negativo.',
+                'fonte' => 'Modello di rating interno sintetico: rating finale = mediana dei rating per KPI; -1 classe con segnali CCII attivi; -2 classi con PN negativo.',
             ],
         ];
     }

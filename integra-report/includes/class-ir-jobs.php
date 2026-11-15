@@ -170,6 +170,14 @@ final class IR_Jobs
         if (!$state['kpi']) {
             throw new RuntimeException('KPI non calcolati.');
         }
+        if ($sid === 'CTX') {
+            $ctx = IR_Context::generate($state, $state['kpi']);
+            IR_Store::mutate($id, function ($s) use ($ctx) {
+                $s['report']['context'] = $ctx;
+                return $s;
+            });
+            return $ctx['usage'];
+        }
         // principio della metodologia: niente sezioni "vuote". Una sezione di calcolo senza
         // alcuna tabella calcolabile viene esclusa e riportata nella checklist con il motivo.
         if ($sid !== 'S0') {
@@ -201,6 +209,9 @@ final class IR_Jobs
                     }
                 }
                 unset($f);
+            } elseif ($item === 'CTX') {
+                // i capitoli vengono scritti comunque: senza scheda, la qualifica dimensionale resta "da verificare"
+                $s['report']['context'] = ['status' => 'error', 'error' => $msg, 'at' => time()];
             } else {
                 $s['report']['sections'][$item] = ['status' => 'error', 'error' => $msg, 'at' => time()];
             }

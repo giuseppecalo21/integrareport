@@ -11,6 +11,11 @@ if (!defined('ABSPATH')) {
 
 final class IR_Extractor
 {
+    /** Parte del documento da cui è letto un valore. */
+    public const ORIGINI = ['prospetto', 'nota_integrativa', 'relazione', 'altro'];
+    /** Categorie di documento da cui non si estraggono valori di bilancio (solo informazioni qualitative). */
+    public const SLOT_SOLO_QUALITATIVI = ['B7'];
+
     public static function system_prompt(): string
     {
         $dict = [];
@@ -32,10 +37,11 @@ REGOLE INDEROGABILI
 5. Colonne multiple: se il prospetto riporta più esercizi (corrente e precedente), estrai i valori di ciascuna colonna con il rispettivo periodo.
 6. Periodo: esercizio annuale → \"AAAA\" (anno della data di chiusura; se l'esercizio non è solare indicalo in nota); situazione infrannuale, scadenziari, piani di ammortamento → \"AAAA-MM-GG\" (data di riferimento); Centrale Rischi → \"AAAA-MM\" (mese di rilevazione); dati prospettici → anno di riferimento \"AAAA\" o, per piani a 12 mesi, la data di inizio \"AAAA-MM-GG\".
 7. Voci assenti: SOLO per le voci degli schemi di Stato Patrimoniale (codici SP_*) e Conto Economico (codici CE_*), se il prospetto è completo e leggibile e la voce semplicemente non compare (per legge le voci a zero possono essere omesse), riporta valore 0 con stato \"assente_nel_prospetto\" e, come citazione, una descrizione del controllo eseguito (es. \"Voce non presente nel prospetto di Conto Economico, pagg. 4-5\"). Non usare mai questo stato per gli altri codici, né quando il prospetto è parziale, illeggibile o abbreviato in modo da accorpare la voce.
-8. Voci \"di cui entro / oltre l'esercizio successivo\": usale se stampate nel prospetto o nelle tabelle della Nota Integrativa, citando la pagina effettiva.
+8. Gerarchia delle fonti contabili: i valori di Stato Patrimoniale (SP_*), Conto Economico (CE_*) e Rendiconto finanziario (RF_*) si leggono ESCLUSIVAMENTE dai prospetti contabili ufficiali (schemi ex artt. 2424 e 2425 c.c., rendiconto OIC 10). Le tabelle della Nota Integrativa si usano solo per le voci che il prospetto non espone (es. crediti verso clienti nei bilanci abbreviati, numero medio dei dipendenti). Non estrarre MAI valori numerici dalla Relazione sulla gestione, dalle relazioni del collegio sindacale o del revisore, né da tabelle riclassificate o riepilogative: da quelle parti si traggono solo informazioni qualitative. Per ogni valore indica in \"origine\" la parte del documento da cui è letto.
+8-bis. Scadenza di crediti e debiti: nello schema ordinario ogni voce di C.II e di D riporta nel prospetto la riga \"esigibili oltre l'esercizio successivo\": estraila per ciascuna voce e per ciascuna colonna (esercizio corrente e precedente) con i codici SP_CII_OLTRE_* e SP_D*_OLTRE; se la riga non compare per una voce, riporta 0 con stato \"assente_nel_prospetto\". I codici aggregati SP_CII_ENTRO, SP_CII_OLTRE, SP_D_ENTRO e SP_D_OLTRE vanno usati solo quando il prospetto (schema abbreviato) stampa la riga riferita al totale: non ricavarli dalle tabelle di scadenza della Nota Integrativa, che non riportano l'esercizio precedente e non ripartiscono tutte le voci.
 9. Affidabilità: \"alta\" se il numero è chiaramente leggibile e univocamente riferito alla voce; \"media\" se la lettura è corretta ma il riferimento richiede interpretazione (es. etichetta diversa dallo schema CEE); \"bassa\" se scansione poco leggibile o dubbio: in questo caso spiega il dubbio nella nota.
 10. Usa esclusivamente i codici del dizionario. Se una voce del documento non corrisponde con certezza a un codice, non forzarla: segnalala negli avvisi.
-11. Informazioni qualitative: riporta solo fatti scritti nel documento (nomi, date, quote, cariche, codici), in forma sintetica e fedele, con pagina e citazione. Nessuna valutazione.
+11. Informazioni qualitative: riporta solo fatti scritti nel documento (nomi, date, quote, cariche, codici), in forma sintetica e fedele, con pagina e citazione. Nessuna valutazione. Nel campo \"valore\" scrivi solo il contenuto, senza ripetere il nome del campo o un'etichetta iniziale (scrivi \"vendita di gas naturale ed energia elettrica\", non \"Attività svolta: vendita di...\"), in una forma che possa essere ripresa in una frase. Quando il fatto è riferito a una data o a un esercizio (addetti, cariche, capitale, eventi), indicalo nel testo (es. \"14 nel 2024, di cui 1 dirigente e 13 impiegati\").
 12. Se il documento non corrisponde alla categoria indicata, imposta documento.corrisponde_alla_categoria = false e spiegalo in documento.note; estrai comunque solo ciò che è certo.
 13. Scrivi note e avvisi in italiano professionale e conciso.
 
@@ -71,12 +77,13 @@ CAMPI DELLE INFORMAZIONI QUALITATIVE
                     'items' => [
                         'type' => 'object',
                         'additionalProperties' => false,
-                        'required' => ['codice', 'periodo', 'valore', 'stato', 'pagina', 'posizione', 'citazione', 'affidabilita', 'nota'],
+                        'required' => ['codice', 'periodo', 'valore', 'stato', 'origine', 'pagina', 'posizione', 'citazione', 'affidabilita', 'nota'],
                         'properties' => [
                             'codice' => ['type' => 'string', 'enum' => array_keys(IR_Catalog::data_dictionary())],
                             'periodo' => ['type' => 'string'],
                             'valore' => ['type' => 'number'],
                             'stato' => ['type' => 'string', 'enum' => ['rilevato', 'assente_nel_prospetto']],
+                            'origine' => ['type' => 'string', 'enum' => self::ORIGINI],
                             'pagina' => $nullableInt,
                             'posizione' => ['type' => 'string'],
                             'citazione' => ['type' => 'string'],
@@ -126,7 +133,9 @@ CAMPI DELLE INFORMAZIONI QUALITATIVE
             . ($profile['esercizi'] !== '' ? "Esercizi da analizzare indicati dal consulente: {$profile['esercizi']}.\n" : '')
             . "\n" . ($codes
                 ? "Codici numerici da cercare prioritariamente in questo documento:\n" . implode("\n", $codes ? $lines : []) . "\n\nPuoi riportare anche altri codici del dizionario se presenti con certezza."
-                : "Per questa categoria non sono previsti codici numerici specifici: estrai soprattutto le informazioni qualitative; riporta codici numerici del dizionario solo se presenti con certezza.")
+                : (in_array($slot, self::SLOT_SOLO_QUALITATIVI, true)
+                    ? "Da questo documento vanno estratte SOLO informazioni qualitative (attività svolta, appartenenza a un gruppo e rapporti con parti correlate, fatti di rilievo successivi alla chiusura, contenziosi, continuità aziendale, organi sociali, personale). Non riportare valori di Stato Patrimoniale, Conto Economico o Rendiconto finanziario: eventuali tabelle numeriche della relazione vanno ignorate."
+                    : "Per questa categoria non sono previsti codici numerici specifici: estrai soprattutto le informazioni qualitative; riporta codici numerici del dizionario solo se presenti con certezza."))
             . "\n\nEstrai i dati seguendo rigorosamente le regole.";
 
         $content = [
@@ -164,6 +173,11 @@ CAMPI DELLE INFORMAZIONI QUALITATIVE
                 $warnings[] = "Valore {$code} scartato: lo stato \"assente nel prospetto\" è ammesso solo per le voci di SP e CE.";
                 continue;
             }
+            $origine = in_array($v['origine'] ?? '', self::ORIGINI, true) ? $v['origine'] : 'altro';
+            if (preg_match('/^(SP|CE|RF)_/', $code) && ($origine === 'relazione' || in_array($slot, self::SLOT_SOLO_QUALITATIVI, true))) {
+                $skippedRel = ($skippedRel ?? 0) + 1;
+                continue;
+            }
             $unit = $dict[$code]['unit'];
             $mult = $unit === 'eur' ? $scale : 1;
             $aff = $v['affidabilita'];
@@ -182,6 +196,7 @@ CAMPI DELLE INFORMAZIONI QUALITATIVE
                 'stato' => $stato,
                 'file_id' => $file['id'],
                 'slot' => $slot,
+                'origine' => $origine,
                 'page' => is_int($v['pagina'] ?? null) ? $v['pagina'] : null,
                 'pos' => (string) ($v['posizione'] ?? ''),
                 'quote' => (string) ($v['citazione'] ?? ''),
@@ -190,8 +205,16 @@ CAMPI DELLE INFORMAZIONI QUALITATIVE
             ];
         }
 
+        if (!empty($skippedRel)) {
+            $warnings[] = "{$skippedRel} valori di bilancio non acquisiti perché letti da una relazione o da un prospetto non ufficiale: i numeri si prendono solo dagli schemi di Stato Patrimoniale, Conto Economico e Rendiconto finanziario.";
+        }
+
         $info = [];
         foreach (($data['informazioni'] ?? []) as $i) {
+            $i['valore'] = self::clean_info_value((string) ($i['campo'] ?? ''), (string) ($i['valore'] ?? ''));
+            if ($i['valore'] === '') {
+                continue;
+            }
             $info[] = [
                 'id' => 'i' . substr(md5($file['id'] . wp_rand() . ($i['campo'] ?? '')), 0, 10),
                 'field' => (string) $i['campo'],
@@ -224,6 +247,33 @@ CAMPI DELLE INFORMAZIONI QUALITATIVE
             'info' => $info,
             'warnings' => array_map(static fn($w) => ['file_id' => $file['id'], 'msg' => $w], $warnings),
         ];
+    }
+
+    /**
+     * Toglie dal valore di un'informazione qualitativa l'eventuale etichetta iniziale
+     * ("Attività svolta: ...", "Soci e quote: ..."), che nel testo produrrebbe ripetizioni.
+     */
+    public static function clean_info_value(string $field, string $value): string
+    {
+        $value = trim(preg_replace('/\s+/u', ' ', $value));
+        if (!preg_match('/^([^:]{3,60}):\s+(.+)$/us', $value, $m)) {
+            return $value;
+        }
+        $norm = static fn(string $t): string => trim(preg_replace('/[^a-z0-9àèéìòù]+/u', ' ', mb_strtolower($t)));
+        $prefix = $norm($m[1]);
+        $labels = [];
+        foreach (IR_Catalog::info_fields() as $k => $label) {
+            $labels[] = $norm($label);
+            $labels[] = $norm((string) preg_split('/[\/(]/u', $label)[0]);
+            $labels[] = $norm(str_replace('_', ' ', $k));
+        }
+        $labels = array_merge($labels, ['attività svolta', 'attività esercitata', 'attività prevalente', 'socio unico', 'soci', 'compagine sociale', 'evento successivo', 'numero medio dipendenti', 'numero dipendenti', 'dipendenti', 'amministratori', 'organo amministrativo', 'nota']);
+        foreach ($labels as $l) {
+            if ($l !== '' && ($prefix === $l || str_starts_with($prefix, $l . ' '))) {
+                return trim($m[2]);
+            }
+        }
+        return $value;
     }
 
     /** Controllo automatico: la sequenza di cifre del valore compare nella citazione? */

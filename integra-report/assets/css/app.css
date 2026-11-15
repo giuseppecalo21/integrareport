@@ -234,3 +234,7 @@ body.ir-print .ir-paper { border: 0; padding: 0; }
   body.ir-print .ir-band { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   body.ir-print .ir-tbl th, body.ir-print .ir-tbl td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+/* parti a uso interno: mai nella stampa del report per il cliente */
+section.ir-internal { border-top: 2px dashed #c3c4c7; margin-top: 32px; padding-top: 8px; }
+@media print { .ir-internal { display: none !important; } }

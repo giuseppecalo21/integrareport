@@ -94,6 +94,9 @@ final class IR_Rest
                 $out['report']['sections'][$sid] = array_intersect_key($sec, array_flip(['status', 'title', 'warnings', 'error', 'reason', 'at', 'usage', 'model']));
             }
         }
+        if (isset($out['report']['context'])) {
+            unset($out['report']['context']['usage']);
+        }
         $out['id'] = $id;
         $out['derived'] = [
             'available' => $avail,
@@ -137,6 +140,9 @@ final class IR_Rest
                 }
                 if (array_key_exists('soci_onerosi', $p)) {
                     $s['params']['soci_onerosi'] = (bool) $p['soci_onerosi'];
+                }
+                if (array_key_exists('infragruppo_commerciali', $p)) {
+                    $s['params']['infragruppo_commerciali'] = (bool) $p['infragruppo_commerciali'];
                 }
                 if (array_key_exists('riparto_zes', $p)) {
                     $s['params']['riparto_zes'] = ($p['riparto_zes'] === null || $p['riparto_zes'] === '') ? null : max(0, min(100, (float) $p['riparto_zes']));
@@ -280,7 +286,11 @@ final class IR_Rest
         $items = array_merge($order, ['S0']); // il sommario per ultimo
         if (is_array($only) && $only) {
             $items = array_values(array_intersect($items, $only));
+            if (empty($state['report']['context']['data'])) {
+                array_unshift($items, 'CTX');
+            }
         } else {
+            array_unshift($items, 'CTX'); // scheda di inquadramento, condivisa da tutti i capitoli
             IR_Store::mutate($id, function ($s) {
                 $s['report'] = ['sections' => [], 'started_at' => time()];
                 return $s;
@@ -462,7 +472,7 @@ final class IR_Rest
         if (empty($state['report']['sections'])) {
             throw new RuntimeException('Report non ancora generato.');
         }
-        $b = new IR_Docx($state);
+        $b = new IR_Docx($state, $req->get_param('kind') === 'audit' ? 'audit' : 'cliente');
         $path = $b->build();
         nocache_headers();
         header('Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document');
